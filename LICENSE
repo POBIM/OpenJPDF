@@ -1,0 +1,56 @@
+OpenJPDF - PDF Editor
+Copyright (c) 2026 Sittichat Pothising
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+
+OpenJPDF uses the following third-party libraries under their respective licenses:
+
+1. iText 7 (v8.0.2)
+   License: GNU Affero General Public License v3 (AGPLv3)
+   URL: https://itextpdf.com/
+   Copyright: 2000-2024 iText Group NV
+
+2. PDFtoImage (v4.1.1)
+   License: MIT License
+   URL: https://github.com/smith-timmermans/PDFtoImage
+   Copyright: PDFtoImage Contributors
+
+3. CommunityToolkit.Mvvm (v8.2.2)
+   License: MIT License
+   URL: https://github.com/CommunityToolkit/dotnet
+   Copyright: Microsoft and Community Contributors
+
+4. Tesseract (v5.2.0)
+   License: Apache License 2.0
+   URL: https://github.com/tesseract-ocr/tesseract
+   Copyright: Tesseract OCR Contributors
+
+5. Fonts (TH Sarabun New, Noto Sans Thai)
+   License: See LICENSE-FONTS.md for details
+
+================================================================================
+
+Full GNU Affero General Public License v3 text follows below:
+See: https://www.gnu.org/licenses/agpl-3.0.txt
+
+NOTE: The full AGPLv3 license text is included in the file COPYING (if present)
+or can be obtained from the GNU website above. This file provides a summary
+and header for the OpenJPDF project under AGPLv3.
+
+For more information about AGPLv3:
+https://www.gnu.org/licenses/why-affero-gpl.html

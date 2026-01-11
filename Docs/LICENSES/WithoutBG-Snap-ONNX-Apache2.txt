@@ -1,0 +1,68 @@
+Apache License
+Version 2.0, January 2004
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+[Full Apache 2.0 License Text]
+
+---
+
+Model: withoutbg/snap (ONNX Model)
+Purpose: Automatic background removal from images
+Model Type: Deep Learning Model (U²-Net based)
+Framework: ONNX (Open Neural Network Exchange)
+License: Apache License 2.0
+
+Website: https://huggingface.co/space/withoutbg/snap
+Source: https://github.com/withoutbg/snap
+
+DESCRIPTION:
+The withoutbg/snap model is an AI-powered image segmentation model that
+automatically removes backgrounds from images. It uses deep learning to:
+- Detect foreground objects
+- Create precise segmentation masks
+- Remove backgrounds with high accuracy
+- Preserve fine details (hair, edges, transparency)
+
+TECHNICAL DETAILS:
+- Model Format: ONNX
+- Input: RGB images (variable size)
+- Output: Binary segmentation mask + image with transparent background
+- Architecture: U²-Net (U-squared Network)
+- Training Data: Diverse image dataset with manual annotations
+- Performance: Real-time processing on CPU/GPU
+
+USAGE IN OpenJPDF:
+- Integrated via Microsoft.ML.OnnxRuntime
+- Processed through SixLabors.ImageSharp
+- Provides automatic background removal feature
+- Optional AI enhancement for image editing
+
+LICENSE TERMS:
+Under Apache 2.0, this model is:
+✓ Free to use (commercial and personal)
+✓ Free to modify and distribute
+✓ Free to use in proprietary applications
+
+REQUIREMENTS:
+✓ Include license notice
+✓ State changes made to the model
+✓ Include a copy of the Apache 2.0 license
+✓ Provide source code if modifications are made
+
+ATTRIBUTION:
+Model: withoutbg/snap
+Authors: WithoutBG Team
+License: Apache License 2.0
+Source: https://huggingface.co/space/withoutbg/snap
+
+NOTE ON MODEL FILES:
+The ONNX model file (snap.onnx or similar) is included in the OpenJPDF
+installation in the models/ directory. The model file itself is subject
+to the Apache License 2.0 terms.
+
+PERFORMANCE NOTES:
+- First run may be slower due to model initialization
+- Subsequent operations use cached model
+- GPU acceleration available if ONNX Runtime with CUDA is installed
+- CPU fallback available for all platforms

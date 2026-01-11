@@ -1,0 +1,128 @@
+<Window x:Class="OpenJPDF.Views.PrinterScannerHelpDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Printer &amp; Scanner Help" 
+        Height="500" Width="550"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="🖨️ Printer &amp; Scanner Status" FontSize="18" FontWeight="Bold"/>
+            <TextBlock Text="Check your connected devices and troubleshooting tips" 
+                       Foreground="Gray" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- Devices List -->
+        <TabControl Grid.Row="1">
+            <!-- Scanners Tab -->
+            <TabItem Header="📷 Scanners">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <TextBlock Grid.Row="0" x:Name="ScannerStatusText" 
+                               FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    
+                    <ListBox Grid.Row="1" x:Name="ScannersList" 
+                             BorderThickness="1" BorderBrush="#E0E0E0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="4">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Manufacturer}" Foreground="Gray" FontSize="11"/>
+                                    <TextBlock Text="{Binding Description}" Foreground="Gray" FontSize="11" 
+                                               TextWrapping="Wrap" MaxWidth="400"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+
+            <!-- Printers Tab -->
+            <TabItem Header="🖨️ Printers">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <TextBlock Grid.Row="0" x:Name="PrinterStatusText" 
+                               FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    
+                    <ListBox Grid.Row="1" x:Name="PrintersList" 
+                             BorderThickness="1" BorderBrush="#E0E0E0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="4">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                        <TextBlock Text=" (Default)" Foreground="Green" FontSize="11">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Status}" Foreground="Gray" FontSize="11"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <!-- Troubleshooting -->
+        <Expander Grid.Row="2" Header="💡 Troubleshooting Tips" Margin="0,16,0,0" IsExpanded="True">
+            <Border Background="#FFF8E1" BorderBrush="#FFE082" BorderThickness="1" 
+                    CornerRadius="4" Padding="12" Margin="0,8,0,0">
+                <StackPanel>
+                    <TextBlock Text="If your scanner is not detected:" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock TextWrapping="Wrap" Margin="0,2">
+                        <Run Text="1."/>
+                        <Run Text=" Make sure the scanner is powered ON and connected (USB/Network)"/>
+                    </TextBlock>
+                    <TextBlock TextWrapping="Wrap" Margin="0,2">
+                        <Run Text="2."/>
+                        <Run Text=" Install the scanner driver from manufacturer's website"/>
+                    </TextBlock>
+                    <TextBlock TextWrapping="Wrap" Margin="0,2">
+                        <Run Text="3."/>
+                        <Run Text=" Check Windows Services: 'Windows Image Acquisition (WIA)' must be running"/>
+                    </TextBlock>
+                    <TextBlock TextWrapping="Wrap" Margin="0,2">
+                        <Run Text="4."/>
+                        <Run Text=" Try: Settings → Devices → Printers &amp; scanners → Add device"/>
+                    </TextBlock>
+                    <Button Content="Open Windows Settings" Margin="0,12,0,0" Padding="12,6"
+                            HorizontalAlignment="Left" Click="OpenWindowsSettings_Click"/>
+                </StackPanel>
+            </Border>
+        </Expander>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Refresh" Width="80" Margin="0,0,8,0" Click="Refresh_Click"/>
+            <Button Content="Close" Width="80" Click="Close_Click" IsDefault="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

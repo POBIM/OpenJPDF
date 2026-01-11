@@ -1,0 +1,243 @@
+================================================================================
+                        OpenJPDF - License Information
+================================================================================
+
+OpenJPDF is licensed under the GNU Affero General Public License v3 (AGPLv3).
+
+SPDX Identifier: AGPL-3.0-or-later
+
+This document lists all third-party libraries and their licenses used in OpenJPDF.
+
+================================================================================
+                         OpenJPDF Application License
+================================================================================
+
+GNU Affero General Public License v3 (AGPLv3)
+
+Copyright (c) 2026 Sittichat Pothising
+
+OpenJPDF is free software: you can redistribute it and/or modify it under the terms
+of the GNU Affero General Public License as published by the Free Software 
+Foundation, either version 3 of the License, or (at your option) any later 
+version.
+
+OpenJPDF is distributed in the hope that it will be useful, but WITHOUT ANY 
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR 
+A PARTICULAR PURPOSE. See the GNU Affero General Public License for more 
+details.
+
+You should have received a copy of the GNU Affero General Public License along 
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+                       Third-Party Libraries & Licenses
+================================================================================
+
+1. iText 7 (v8.0.2)
+   License: GNU Affero General Public License v3 (AGPLv3)
+   Purpose: PDF library for document handling
+   Website: https://itextpdf.com/
+   License Text: See iText7-AGPL.txt
+   
+   COMPATIBILITY: iText 7 is dual-licensed under AGPLv3 and commercial license.
+   OpenJPDF uses it under AGPLv3 terms, which is compatible with OpenJPDF's AGPLv3 license.
+
+2. Noto Sans Thai (Font)
+   License: Open Font License (OFL)
+   Purpose: Support for Thai text rendering
+   Website: https://fonts.google.com/noto/specimen/Noto+Sans+Thai
+   
+   USAGE: This font is included and redistributed as-is with OpenJPDF.
+   PERMISSIONS: You may use, modify, and redistribute this font freely.
+   RESTRICTIONS: You cannot sell the font by itself.
+
+3. TH Sarabun New (Font)
+   License: Public Domain
+   Purpose: Alternative Thai font support
+   Source: Thai Government
+   
+   USAGE: This font is in the public domain and can be used freely.
+   PERMISSIONS: You may use this font for any purpose without restriction.
+
+4. PDFtoImage
+   License: MIT License
+   Purpose: PDF to Image conversion
+   Repository: https://github.com/smith-timmermans/PDFtoImage
+   License Text: See PDFtoImage-MIT.txt
+   
+   USAGE: This library is used for converting PDF pages to images.
+   TERMS: You must include the license notice in your documentation.
+
+5. CommunityToolkit.Mvvm
+   License: MIT License
+   Purpose: MVVM Architecture Framework
+   Repository: https://github.com/CommunityToolkit/dotnet
+   Documentation: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/
+   License Text: See CommunityToolkit-MIT.txt
+   
+   USAGE: This library provides MVVM infrastructure for OpenJPDF.
+   TERMS: You must include the license notice in your documentation.
+
+6. Tesseract OCR
+   License: Apache License 2.0
+   Purpose: Optical Character Recognition (OCR) Engine
+   Repository: https://github.com/tesseract-ocr/tesseract
+   License Text: See TesseractOCR-Apache2.txt
+   
+   USAGE: This library enables text extraction from PDF pages.
+   TERMS: You must include the license notice in your documentation.
+
+7. Microsoft.ML.OnnxRuntime (v1.18.0)
+   License: MIT License
+   Purpose: ONNX model inference and execution engine
+   Website: https://onnxruntime.ai/
+   Repository: https://github.com/microsoft/onnxruntime
+   License Text: See OnnxRuntime-MIT.txt
+   
+   USAGE: Enables OpenJPDF to run ONNX machine learning models for advanced
+   image processing tasks such as automatic background removal.
+   FEATURES: Multi-platform support, GPU acceleration, optimized inference
+   TERMS: You must include the license notice in your documentation.
+
+8. SixLabors.ImageSharp (v3.1.5)
+   License: Six Labors Software License v1 (MIT-compatible)
+   Purpose: Image processing and manipulation library
+   Website: https://sixlabors.com/
+   Repository: https://github.com/SixLabors/ImageSharp
+   License Text: See ImageSharp-SixLabors.txt
+   
+   USAGE: Provides advanced image processing capabilities including:
+   - Image loading, processing, and manipulation
+   - Format conversion (PNG, JPEG, WEBP, etc.)
+   - Image filtering and transformations
+   - Pixel-level image operations
+   FEATURES: Pure .NET implementation, high-performance, thread-safe
+   TERMS: You must include the license notice in your documentation.
+
+9. withoutbg/snap (ONNX Model) - AI Background Removal
+   License: Apache License 2.0
+   Purpose: Automatic background removal from images using deep learning
+   Model Type: U²-Net based image segmentation
+   Source: https://huggingface.co/space/withoutbg/snap
+   License Text: See WithoutBG-Snap-ONNX-Apache2.txt
+   
+   DESCRIPTION: AI-powered image segmentation model that automatically
+   removes backgrounds from images with high accuracy and fine detail
+   preservation (handles hair, edges, transparency).
+   
+   USAGE: Integrated via Microsoft.ML.OnnxRuntime and SixLabors.ImageSharp
+   to provide automatic background removal feature in OpenJPDF.
+   
+   TECHNICAL: Supports real-time processing on CPU/GPU, variable input sizes
+   ATTRIBUTION: Model by WithoutBG Team
+   TERMS: Apache 2.0 - include license, state changes, provide source if modified
+
+================================================================================
+                            Summary of Licenses
+================================================================================
+
+AGPL-3.0-or-later       - OpenJPDF, iText 7
+MIT                     - PDFtoImage, CommunityToolkit.Mvvm, OnnxRuntime
+Six Labors Software v1  - SixLabors.ImageSharp
+Apache 2.0              - Tesseract OCR, withoutbg/snap ONNX Model
+OFL                     - Noto Sans Thai Font
+Public Domain           - TH Sarabun New Font
+
+================================================================================
+                    How OpenJPDF Complies with AGPLv3
+================================================================================
+
+1. SOURCE CODE AVAILABILITY
+   - OpenJPDF source code is publicly available on GitHub
+   - All modifications must be tracked and disclosed
+   - Users who use OpenJPDF must have access to the source code
+
+2. ATTRIBUTION
+   - Original copyright notice is preserved in all files
+   - All authors and contributors are acknowledged
+   - License information is provided to end users
+
+3. DERIVATIVE WORKS
+   - Any modifications to OpenJPDF must be licensed under AGPLv3
+   - Source code of modifications must be made available
+   - Changes must be clearly documented
+
+4. THIRD-PARTY COMPLIANCE
+   - iText 7 is used under AGPLv3 (compatible)
+   - MIT-licensed libraries are compatible with AGPLv3
+   - Apache 2.0 license is compatible with AGPLv3
+   - Font licenses are compatible and properly attributed
+
+================================================================================
+                        License Compatibility Matrix
+================================================================================
+
+License          | AGPLv3  | MIT | Apache 2.0 | OFL | Public Domain
+OpenJPDF (AGPLv3)    |   ✓     | ✓   |     ✓      | ✓   |      ✓
+Can be combined? |         | ✓   |     ✓      | ✓   |      ✓
+
+Note: All third-party licenses used in OpenJPDF are compatible with AGPLv3.
+
+================================================================================
+                         Where to Find Licenses
+================================================================================
+
+Root Directory:
+- LICENSE              - Full text of GNU AGPLv3
+- LICENSE-FONTS.md     - Detailed font licensing information
+
+Docs/LICENSES Directory:
+- iText7-AGPL.txt         - iText 7 license information
+- PDFtoImage-MIT.txt      - PDFtoImage license
+- CommunityToolkit-MIT.txt - CommunityToolkit.Mvvm license
+- TesseractOCR-Apache2.txt - Tesseract OCR license
+
+================================================================================
+                            Important Notes
+================================================================================
+
+1. WARRANTY DISCLAIMER
+   OpenJPDF is provided "as-is" without any warranty or guarantee.
+   Users assume all risk and responsibility for using OpenJPDF.
+
+2. COMMERCIAL USE
+   OpenJPDF can be used for commercial purposes under AGPLv3.
+   However, if you modify OpenJPDF, you must disclose the source code.
+
+3. NETWORK DISTRIBUTION
+   If you distribute OpenJPDF over a network (including SaaS), you must
+   provide users with access to the source code.
+
+4. MODIFICATIONS
+   If you modify OpenJPDF, you must:
+   - Keep the AGPLv3 license
+   - Disclose your modifications
+   - Make source code available to users
+
+5. REDISTRIBUTION
+   You can redistribute OpenJPDF, but you must:
+   - Keep all license files
+   - Include this LICENSES.txt file
+   - Maintain copyright notices
+   - Include source code access information
+
+================================================================================
+                             Contact & Support
+================================================================================
+
+Developer:  Sittichat Pothising (สิทธิชาติ โปธิสิงห์)
+Repository: https://github.com/POBIM/OpenJPDF
+Issues:     https://github.com/POBIM/OpenJPDF/issues
+
+For license-related questions, please refer to:
+https://www.gnu.org/licenses/agpl-3.0.html
+
+================================================================================
+                             Last Updated
+================================================================================
+
+Version: 1.0.0
+Date: January 11, 2026
+License: GNU Affero General Public License v3 (AGPLv3)
+
+================================================================================

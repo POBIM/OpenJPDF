@@ -1,0 +1,329 @@
+<Window x:Class="OpenJPDF.Views.AboutDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OpenJPDF - About" 
+        Height="750" Width="700"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True">
+    
+    <Border Background="White" CornerRadius="12" 
+            BorderBrush="#2196F3" BorderThickness="2"
+            Margin="10">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="20" ShadowDepth="0" Opacity="0.3"/>
+        </Border.Effect>
+        
+        <Grid Margin="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="25,20,25,15" Background="White">
+                <TextBlock Text="OpenJPDF" FontSize="42" FontWeight="Bold" 
+                           Foreground="#2196F3" HorizontalAlignment="Center"/>
+                <TextBlock Text="PDF Editor" FontSize="16" 
+                           Foreground="#666666" HorizontalAlignment="Center"/>
+                <TextBlock Text="Version 1.0.0" FontSize="11" 
+                           Foreground="#999999" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+            </StackPanel>
+
+            <!-- Tabs -->
+            <TabControl Grid.Row="1" Background="White" BorderThickness="0,1,0,0" BorderBrush="#EFEFEF">
+                <!-- About Tab -->
+                <TabItem Header="About" Padding="15,8" Background="White">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="25,15">
+                        <StackPanel>
+                            <!-- Developer Credit -->
+                            <TextBlock TextWrapping="Wrap" TextAlignment="Center" 
+                                       FontSize="13" Foreground="#333333" Margin="0,0,0,12">
+                                <Run>โปรแกรมนี้พัฒนาโดย</Run>
+                                <LineBreak/>
+                                <Run FontWeight="Bold" FontSize="16" Foreground="#2196F3">สิทธิชาติ โปธิสิงห์</Run>
+                                <LineBreak/>
+                                <Run FontSize="11" Foreground="#666666">Sittichat Pothising</Run>
+                            </TextBlock>
+                            
+                            <!-- Features Section -->
+                            <Border Background="#F5F5F5" CornerRadius="8" Padding="15" Margin="0,8">
+                                <StackPanel>
+                                    <TextBlock Text="คุณสมบัติหลัก" FontWeight="SemiBold" FontSize="14" 
+                                               Foreground="#333333" Margin="0,0,0,10"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="📄 เปิดและดู PDF" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="📝 เพิ่มข้อความ" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="🖼️ เพิ่มรูปภาพ" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="▭ เพิ่มรูปร่าง" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="🔍 OCR ข้อความ" FontSize="12" Margin="0,2"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="📑 รวม PDF" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="✂️ แยกหน้า PDF" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="↻ หมุนหน้า" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="🗑️ ลบหน้า" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Text="🖥️ นำเสนอ (F5)" FontSize="12" Margin="0,2"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Features Tab -->
+                <TabItem Header="Features" Padding="15,8" Background="White">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="25,15">
+                        <StackPanel>
+                            <!-- How to Use Section -->
+                            <Border Background="#E8F5E9" CornerRadius="8" Padding="15" Margin="0,8">
+                                <StackPanel>
+                                    <TextBlock Text="วิธีใช้งาน" FontWeight="SemiBold" FontSize="14" 
+                                               Foreground="#2E7D32" Margin="0,0,0,10"/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#333333" LineHeight="20">
+                                        <Run FontWeight="Medium">เปิดไฟล์:</Run>
+                                        <Run>คลิก "Open" หรือลากไฟล์ PDF มาวาง</Run>
+                                        <LineBreak/>
+                                        <Run FontWeight="Medium">จัดการหน้า:</Run>
+                                        <Run>เลือกหลายหน้า (Ctrl+คลิก) แล้วหมุน/ย้าย/ลบพร้อมกัน</Run>
+                                        <LineBreak/>
+                                        <Run FontWeight="Medium">เพิ่มเนื้อหา:</Run>
+                                        <Run>ใช้ปุ่มบน Toolbar เพื่อเพิ่มข้อความ รูปภาพ หรือรูปร่าง</Run>
+                                        <LineBreak/>
+                                        <Run FontWeight="Medium">บันทึก:</Run>
+                                        <Run>กด Ctrl+S เพื่อบันทึกการเปลี่ยนแปลง</Run>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Border>
+                            
+                            <!-- Keyboard Shortcuts -->
+                            <Border Background="#FFF3E0" CornerRadius="8" Padding="15" Margin="0,8">
+                                <StackPanel>
+                                    <TextBlock Text="ปุ่มลัด" FontWeight="SemiBold" FontSize="14" 
+                                               Foreground="#E65100" Margin="0,0,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Ctrl+O  เปิดไฟล์" FontSize="11" FontFamily="Consolas" Margin="0,1"/>
+                                            <TextBlock Text="Ctrl+S  บันทึก" FontSize="11" FontFamily="Consolas" Margin="0,1"/>
+                                            <TextBlock Text="Ctrl+L  หมุนซ้าย" FontSize="11" FontFamily="Consolas" Margin="0,1"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="Ctrl+R  หมุนขวา" FontSize="11" FontFamily="Consolas" Margin="0,1"/>
+                                            <TextBlock Text="Ctrl+D  ทำซ้ำหน้า" FontSize="11" FontFamily="Consolas" Margin="0,1"/>
+                                            <TextBlock Text="F5     นำเสนอ" FontSize="11" FontFamily="Consolas" Margin="0,1"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- License Tab -->
+                <TabItem Header="License" Padding="15,8" Background="White">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="25,15">
+                        <StackPanel>
+                            <Border Background="#E3F2FD" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                                <StackPanel>
+                                    <TextBlock Text="📜 GNU Affero General Public License v3" FontWeight="Bold" 
+                                               FontSize="13" Foreground="#1565C0" Margin="0,0,0,5"/>
+                                    <TextBlock Text="(AGPLv3)" FontSize="11" Foreground="#1565C0" Margin="0,0,0,10"/>
+                                    
+                                    <TextBlock Text="SPDX Identifier: AGPL-3.0-or-later" FontSize="10" 
+                                               Foreground="#0D47A1" FontFamily="Consolas" Margin="0,5,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="✅ สิ่งที่อนุญาต (Permissions)" FontWeight="Bold" FontSize="12" 
+                                       Foreground="#2E7D32" Margin="0,10,0,8"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#333333" Margin="0,0,0,12">
+                                <Run>• ใช้งานฟรี (ทั้งส่วนตัวและเชิงพาณิชย์)</Run>
+                                <LineBreak/>
+                                <Run>• ดัดแปลงและแก้ไขได้</Run>
+                                <LineBreak/>
+                                <Run>• แจกจ่ายต่อได้อย่างอิสระ</Run>
+                                <LineBreak/>
+                                <Run>• ใช้งานเพื่อการศึกษาและการกุศล</Run>
+                            </TextBlock>
+
+                            <TextBlock Text="⚠️ ข้อจำกัด (Conditions)" FontWeight="Bold" FontSize="12" 
+                                       Foreground="#D32F2F" Margin="0,10,0,8"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#333333" Margin="0,0,0,12">
+                                <Run>• ต้องระบุการเปลี่ยนแปลง</Run>
+                                <LineBreak/>
+                                <Run>• เปิดเผยซอร์สโค้ด (Source Code Disclosure)</Run>
+                                <LineBreak/>
+                                <Run>• เก็บ License เดิมไว้</Run>
+                                <LineBreak/>
+                                <Run>• รักษาข้อความลิขสิทธิ์</Run>
+                            </TextBlock>
+
+                            <TextBlock Text="👤 ผู้พัฒนา" FontWeight="Bold" FontSize="12" 
+                                       Foreground="#333333" Margin="0,10,0,8"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#333333" Margin="0,0,0,12">
+                                <Run>สิทธิชาติ โปธิสิงห์ (Sittichat Pothising)</Run>
+                                <LineBreak/>
+                                <Run>© 2026 - ซอฟต์แวร์เสรี (Free Software)</Run>
+                            </TextBlock>
+
+                            <Border Background="#FFFDE7" CornerRadius="8" Padding="12" Margin="0,10,0,0">
+                                <TextBlock TextWrapping="Wrap" FontSize="10" Foreground="#F57F17">
+                                    <Run>📌 ไม่มีการรับประกัน (NO WARRANTY)</Run>
+                                    <LineBreak/>
+                                    <Run>ใช้งานได้ภายใต้เงื่อนไข AGPLv3 ทั้งหมด</Run>
+                                </TextBlock>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Dependencies Tab -->
+                <TabItem Header="Dependencies" Padding="15,8" Background="White">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="25,15">
+                        <StackPanel>
+                            <TextBlock Text="📚 Third-party Libraries" FontWeight="Bold" FontSize="13" 
+                                       Foreground="#333333" Margin="0,0,0,15"/>
+
+                            <!-- iText 7 -->
+                            <Border Background="#E8F5E9" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="iText 7 (v8.0.2)" FontWeight="Bold" FontSize="11" Foreground="#2E7D32"/>
+                                    <TextBlock Text="License: AGPLv3" FontSize="10" Foreground="#555555" Margin="0,3,0,0"/>
+                                    <TextBlock Text="Purpose: PDF library for document handling" FontSize="10" Foreground="#666666" Margin="0,2,0,0"/>
+                                    <TextBlock Text="✓ Compatible with OpenJPDF" FontSize="10" Foreground="#2E7D32" Margin="0,3,0,0" FontWeight="Bold"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Fonts -->
+                            <TextBlock Text="Fonts" FontWeight="Bold" FontSize="11" Foreground="#333333" Margin="0,10,0,8"/>
+                            
+                            <Border Background="#E0F2F1" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="Noto Sans Thai" FontWeight="Bold" FontSize="10" Foreground="#00695C"/>
+                                    <TextBlock Text="License: Open Font License (OFL)" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                    <TextBlock Text="✓ Free to redistribute" FontSize="9" Foreground="#00695C" Margin="0,2,0,0" FontWeight="Bold"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#E0F2F1" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="TH Sarabun New" FontWeight="Bold" FontSize="10" Foreground="#00695C"/>
+                                    <TextBlock Text="License: Public Domain" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                    <TextBlock Text="✓ Free to use and distribute" FontSize="9" Foreground="#00695C" Margin="0,2,0,0" FontWeight="Bold"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Other Libraries -->
+                            <TextBlock Text="Other Libraries" FontWeight="Bold" FontSize="11" Foreground="#333333" Margin="0,10,0,8"/>
+
+                            <Border Background="#F3E5F5" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="PDFtoImage" FontWeight="Bold" FontSize="10" Foreground="#6A1B9A"/>
+                                    <TextBlock Text="License: MIT" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#F3E5F5" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="CommunityToolkit.Mvvm" FontWeight="Bold" FontSize="10" Foreground="#6A1B9A"/>
+                                    <TextBlock Text="License: MIT" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#F3E5F5" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="Tesseract OCR" FontWeight="Bold" FontSize="10" Foreground="#6A1B9A"/>
+                                    <TextBlock Text="License: Apache 2.0" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ML Libraries Section -->
+                            <TextBlock Text="Machine Learning Libraries" FontWeight="Bold" FontSize="11" Foreground="#333333" Margin="0,10,0,8"/>
+
+                            <Border Background="#E1BEE7" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="Microsoft.ML.OnnxRuntime (v1.18.0)" FontWeight="Bold" FontSize="10" Foreground="#4527A0"/>
+                                    <TextBlock Text="License: MIT" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Purpose: ONNX model inference engine" FontSize="9" Foreground="#666666" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#E1BEE7" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                <StackPanel>
+                                    <TextBlock Text="SixLabors.ImageSharp (v3.1.5)" FontWeight="Bold" FontSize="10" Foreground="#4527A0"/>
+                                    <TextBlock Text="License: Six Labors Software v1 (MIT-compatible)" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Purpose: Advanced image processing and manipulation" FontSize="9" Foreground="#666666" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#E1BEE7" CornerRadius="8" Padding="12">
+                                <StackPanel>
+                                    <TextBlock Text="withoutbg/snap ONNX Model" FontWeight="Bold" FontSize="10" Foreground="#4527A0"/>
+                                    <TextBlock Text="License: Apache 2.0" FontSize="9" Foreground="#555555" Margin="0,2,0,0"/>
+                                    <TextBlock Text="Purpose: AI-powered background removal" FontSize="9" Foreground="#666666" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="📖 See Docs/LICENSES.txt for detailed information" FontSize="10" 
+                                       Foreground="#1565C0" Margin="0,15,0,0">
+                                <TextBlock.TextDecorations>
+                                    <TextDecorationCollection>
+                                        <TextDecoration Location="Underline"/>
+                                    </TextDecorationCollection>
+                                </TextBlock.TextDecorations>
+                            </TextBlock>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+
+            <!-- Footer Button -->
+            <Button Grid.Row="2" Content="เริ่มใช้งาน OpenJPDF" 
+                    Click="StartButton_Click"
+                    HorizontalAlignment="Center"
+                    Padding="50,14"
+                    FontSize="15"
+                    FontWeight="Medium"
+                    Margin="25,15,25,25"
+                    Cursor="Hand">
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Setter Property="Background" Value="#2196F3"/>
+                        <Setter Property="Foreground" Value="White"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" 
+                                            CornerRadius="8"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#1976D2"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+        </Grid>
+    </Border>
+</Window>

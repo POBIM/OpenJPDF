@@ -1,0 +1,202 @@
+<Window x:Class="OpenJPDF.Views.TextInputDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Add Text" 
+        Height="600" Width="450"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="100"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Text Input -->
+        <TextBlock Grid.Row="0" Text="Text Content" FontWeight="SemiBold" Margin="0,0,0,8"/>
+        <TextBox Grid.Row="1" x:Name="TextInputBox" 
+                 AcceptsReturn="True" 
+                 TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"
+                 Padding="8"/>
+
+        <!-- Font Family and Size Row -->
+        <Grid Grid.Row="2" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="100"/>
+            </Grid.ColumnDefinitions>
+            
+            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                <TextBlock Text="Font Family" FontSize="11" Margin="0,0,0,4"/>
+                <ComboBox x:Name="FontFamilyCombo" SelectedIndex="0">
+                    <ComboBoxItem Content="Arial"/>
+                    <ComboBoxItem Content="Times New Roman"/>
+                    <ComboBoxItem Content="Calibri"/>
+                    <ComboBoxItem Content="Segoe UI"/>
+                    <ComboBoxItem Content="Tahoma"/>
+                    <ComboBoxItem Content="Verdana"/>
+                    <ComboBoxItem Content="Georgia"/>
+                    <ComboBoxItem Content="Courier New"/>
+                    <ComboBoxItem Content="TH Sarabun New"/>
+                    <ComboBoxItem Content="Angsana New"/>
+                </ComboBox>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="Font Size" FontSize="11" Margin="0,0,0,4"/>
+                <ComboBox x:Name="FontSizeCombo" SelectedIndex="2">
+                    <ComboBoxItem Content="8"/>
+                    <ComboBoxItem Content="10"/>
+                    <ComboBoxItem Content="12"/>
+                    <ComboBoxItem Content="14"/>
+                    <ComboBoxItem Content="16"/>
+                    <ComboBoxItem Content="18"/>
+                    <ComboBoxItem Content="24"/>
+                    <ComboBoxItem Content="36"/>
+                    <ComboBoxItem Content="48"/>
+                    <ComboBoxItem Content="72"/>
+                </ComboBox>
+            </StackPanel>
+        </Grid>
+
+        <!-- Text Color Row -->
+        <Grid Grid.Row="3" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            
+            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                <TextBlock Text="Text Color" FontSize="11" Margin="0,0,0,4"/>
+                <ComboBox x:Name="TextColorCombo" SelectedIndex="0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Rectangle Width="16" Height="16" Margin="0,0,6,0" 
+                                           Fill="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBoxItem}}"/>
+                                <TextBlock Text="{Binding}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                    <ComboBoxItem Content="Black" Tag="Black"/>
+                    <ComboBoxItem Content="Red" Tag="Red"/>
+                    <ComboBoxItem Content="Blue" Tag="Blue"/>
+                    <ComboBoxItem Content="Green" Tag="Green"/>
+                    <ComboBoxItem Content="Orange" Tag="Orange"/>
+                    <ComboBoxItem Content="Purple" Tag="Purple"/>
+                    <ComboBoxItem Content="Gray" Tag="Gray"/>
+                    <ComboBoxItem Content="White" Tag="White"/>
+                </ComboBox>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <TextBlock Text="Background" FontSize="11" Margin="0,0,0,4"/>
+                <ComboBox x:Name="BackgroundColorCombo" SelectedIndex="0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Rectangle Width="16" Height="16" Margin="0,0,6,0" 
+                                           Fill="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBoxItem}}"
+                                           Stroke="Gray" StrokeThickness="0.5"/>
+                                <TextBlock Text="{Binding}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                    <ComboBoxItem Content="Transparent" Tag="Transparent"/>
+                    <ComboBoxItem Content="White" Tag="White"/>
+                    <ComboBoxItem Content="Yellow" Tag="#FFFF00"/>
+                    <ComboBoxItem Content="Light Blue" Tag="#E3F2FD"/>
+                    <ComboBoxItem Content="Light Green" Tag="#E8F5E9"/>
+                    <ComboBoxItem Content="Light Pink" Tag="#FCE4EC"/>
+                    <ComboBoxItem Content="Light Gray" Tag="#F5F5F5"/>
+                </ComboBox>
+            </StackPanel>
+        </Grid>
+
+        <!-- Border Row -->
+        <Grid Grid.Row="4" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            
+            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                <TextBlock Text="Border Color" FontSize="11" Margin="0,0,0,4"/>
+                <ComboBox x:Name="BorderColorCombo" SelectedIndex="0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <Rectangle Width="16" Height="16" Margin="0,0,6,0" 
+                                           Fill="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBoxItem}}"
+                                           Stroke="Gray" StrokeThickness="0.5"/>
+                                <TextBlock Text="{Binding}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                    <ComboBoxItem Content="None" Tag="Transparent"/>
+                    <ComboBoxItem Content="Black" Tag="Black"/>
+                    <ComboBoxItem Content="Red" Tag="Red"/>
+                    <ComboBoxItem Content="Blue" Tag="Blue"/>
+                    <ComboBoxItem Content="Gray" Tag="Gray"/>
+                </ComboBox>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <TextBlock Text="Border Width" FontSize="11" Margin="0,0,0,4"/>
+                <ComboBox x:Name="BorderWidthCombo" SelectedIndex="0">
+                    <ComboBoxItem Content="0"/>
+                    <ComboBoxItem Content="1"/>
+                    <ComboBoxItem Content="2"/>
+                    <ComboBoxItem Content="3"/>
+                    <ComboBoxItem Content="4"/>
+                </ComboBox>
+            </StackPanel>
+        </Grid>
+
+        <!-- Text Style Row -->
+        <StackPanel Grid.Row="5" Margin="0,12,0,0">
+            <TextBlock Text="Text Style" FontSize="11" Margin="0,0,0,4"/>
+            <StackPanel Orientation="Horizontal">
+                <CheckBox x:Name="BoldCheck" Content="Bold" Margin="0,0,16,0"/>
+                <CheckBox x:Name="ItalicCheck" Content="Italic" Margin="0,0,16,0"/>
+                <CheckBox x:Name="UnderlineCheck" Content="Underline"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Text Alignment Row -->
+        <StackPanel Grid.Row="6" Margin="0,12,0,0">
+            <TextBlock Text="Text Alignment" FontSize="11" Margin="0,0,0,4"/>
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="AlignLeftRadio" Content="Left" IsChecked="True" Margin="0,0,16,0" GroupName="Alignment"/>
+                <RadioButton x:Name="AlignCenterRadio" Content="Center" Margin="0,0,16,0" GroupName="Alignment"/>
+                <RadioButton x:Name="AlignRightRadio" Content="Right" GroupName="Alignment"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Preview -->
+        <StackPanel Grid.Row="7" Margin="0,16,0,0">
+            <TextBlock Text="Preview" FontSize="11" Margin="0,0,0,4"/>
+            <Border x:Name="PreviewBorder" Background="White" BorderBrush="#E0E0E0" BorderThickness="1" 
+                    Padding="8" MinHeight="40" CornerRadius="4">
+                <TextBlock x:Name="PreviewText" Text="Preview text" TextWrapping="Wrap"/>
+            </Border>
+        </StackPanel>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="9" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Cancel" Width="80" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Add" Width="80" Click="Add_Click" IsDefault="True" 
+                    Background="#2196F3" Foreground="White"/>
+        </StackPanel>
+    </Grid>
+</Window>
