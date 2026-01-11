@@ -134,6 +134,7 @@ public partial class MainWindow : Window
             vm.RefreshHeaderFooterPreview += RefreshHeaderFooterPreviewOnCanvas;
             vm.RefreshExtractedContentRequested += RefreshExtractedContentOnCanvas;
             vm.PropertyChanged += ViewModel_PropertyChanged;
+            vm.GetPixelsPerPointFunc = GetPixelsPerPoint;
 
             // Initialize resize handles manager
             _resizeHandlesManager = new ResizeHandlesManager(AnnotationCanvas, vm, RefreshAnnotationPreviews);
@@ -1114,6 +1115,28 @@ public partial class MainWindow : Window
             contextMenu.Items.Add(bringToFrontItem);
             contextMenu.Items.Add(sendToBackItem);
 
+            // Add "Add to Header/Footer" option for text annotations
+            // This converts the annotation to a CustomTextBox managed by Header/Footer system
+            if (annotation is TextAnnotationItem)
+            {
+                contextMenu.Items.Add(new Separator());
+                
+                var addToHeaderFooterItem = new MenuItem 
+                { 
+                    Header = "Add to Header/Footer (All Pages)",
+                    Icon = new TextBlock { Text = "📄", FontSize = 12 },
+                    ToolTip = "Convert this text to Header/Footer system.\nIt will appear on all pages and can be managed via Header/Footer dialog."
+                };
+                addToHeaderFooterItem.Click += (s, args) =>
+                {
+                    if (DataContext is MainViewModel vm)
+                    {
+                        vm.ConvertAnnotationToHeaderFooter(annotation);
+                    }
+                };
+                contextMenu.Items.Add(addToHeaderFooterItem);
+            }
+
             // Add Crop Image and OCR Image for image annotations
             if (annotation is ImageAnnotationItem imageAnnotation)
             {
@@ -1629,6 +1652,8 @@ public partial class MainWindow : Window
         // Refresh regular annotations first (clears canvas)
         RefreshAnnotationPreviews();
     }
+
+
 
     /// <summary>
     /// Render extracted content overlays on canvas
@@ -2482,15 +2507,6 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(textBox.Text) && !textBox.ShowBorder) return;
 
-        // Convert offsets from PDF points to screen pixels using actual conversion factor
-        double x = textBox.OffsetX * pixelsPerPoint;
-        // Y is from bottom in PDF, from top in WPF
-        double boxHeightPx = textBox.BoxHeight * pixelsPerPoint;
-        double y = imageHeightPx - (textBox.OffsetY * pixelsPerPoint) - boxHeightPx;
-
-        double boxWidth = textBox.BoxWidth * pixelsPerPoint;
-        double boxHeight = boxHeightPx;
-
         // Parse color
         System.Windows.Media.Color textColor;
         try
@@ -2504,30 +2520,20 @@ public partial class MainWindow : Window
             textColor = System.Windows.Media.Colors.Black;
         }
 
-        // Create container border if needed
-        if (textBox.ShowBorder)
-        {
-            var border = new Border
-            {
-                Width = boxWidth,
-                Height = boxHeight,
-                BorderBrush = new SolidColorBrush(textColor),
-                BorderThickness = new Thickness(1),
-                Background = System.Windows.Media.Brushes.Transparent
-            };
-            Canvas.SetLeft(border, x);
-            Canvas.SetTop(border, y);
-            AnnotationCanvas.Children.Add(border);
-        }
+        // Convert font size from points to pixels
+        double fontSize = textBox.FontSize * pixelsPerPoint;
+        if (fontSize < 6) fontSize = 10 * pixelsPerPoint;
 
-        // Add text if present (supports multiline)
+        // Convert offsets from PDF points to screen pixels
+        // OffsetY = distance from page bottom to text position
+        // screenY = (pageHeight - OffsetY) in pixels
+        // This matches the annotation coordinate system
+        double x = textBox.OffsetX * pixelsPerPoint;
+        double y = imageHeightPx - (textBox.OffsetY * pixelsPerPoint);
+
+        // Add text (auto-fit width)
         if (!string.IsNullOrEmpty(textBox.Text))
         {
-            // Convert font size from points to pixels using actual conversion factor
-            double fontSize = textBox.FontSize * pixelsPerPoint;
-            if (fontSize < 6) fontSize = 10 * pixelsPerPoint;
-            double padding = 3 * pixelsPerPoint;
-
             var textBlock = new TextBlock
             {
                 Text = textBox.Text,
@@ -2535,9 +2541,7 @@ public partial class MainWindow : Window
                 Foreground = new SolidColorBrush(textColor),
                 FontWeight = textBox.IsBold ? FontWeights.Bold : FontWeights.Normal,
                 FontStyle = textBox.IsItalic ? FontStyles.Italic : FontStyles.Normal,
-                TextWrapping = TextWrapping.Wrap,
-                Width = boxWidth - (padding * 2),
-                MaxHeight = boxHeight - (padding * 2)
+                TextWrapping = TextWrapping.NoWrap // Auto-fit width
             };
 
             // Try to set font family
@@ -2550,9 +2554,8 @@ public partial class MainWindow : Window
             }
             catch { }
 
-            // Position text inside the box (with small padding)
-            Canvas.SetLeft(textBlock, x + padding);
-            Canvas.SetTop(textBlock, y + padding);
+            Canvas.SetLeft(textBlock, x);
+            Canvas.SetTop(textBlock, y);
             AnnotationCanvas.Children.Add(textBlock);
         }
     }
@@ -2665,6 +2668,24 @@ public partial class MainWindow : Window
         Canvas.SetLeft(textBlock, left);
         Canvas.SetTop(textBlock, y);
         AnnotationCanvas.Children.Add(textBlock);
+    }
+
+    /// <summary>
+    /// Get pixels per point for current rendered image
+    /// </summary>
+    private double GetPixelsPerPoint()
+    {
+        if (DataContext is not MainViewModel vm) return 1.0;
+        if (PdfImage.Source == null) return vm.ZoomScale;
+        
+        double imageWidthPx = PdfImage.Source is System.Windows.Media.Imaging.BitmapSource bmp 
+            ? bmp.PixelWidth 
+            : PdfImage.ActualWidth;
+
+        var (pageWidthPts, _) = vm.GetCurrentPageDimensionsInPoints();
+        if (pageWidthPts <= 0) return vm.ZoomScale;
+
+        return imageWidthPx / pageWidthPts;
     }
 
     #endregion
@@ -2909,6 +2930,58 @@ public partial class MainWindow : Window
         if (DataContext is MainViewModel vm)
         {
             vm.SyncSelectedThumbnails(ThumbnailListBox.SelectedItems);
+        }
+    }
+    
+    /// <summary>
+    /// Prevent right-click from clearing multi-selection if clicking on an already selected item.
+    /// This preserves the selection for context menu batch operations.
+    /// </summary>
+    private void ThumbnailListBox_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // Find the ListBoxItem that was right-clicked
+        var point = e.GetPosition(ThumbnailListBox);
+        var element = ThumbnailListBox.InputHitTest(point) as DependencyObject;
+        
+        while (element != null && element is not ListBoxItem)
+        {
+            element = VisualTreeHelper.GetParent(element);
+        }
+        
+        if (element is ListBoxItem listBoxItem)
+        {
+            // If this item is already selected (part of multi-selection), don't change selection
+            if (listBoxItem.IsSelected && ThumbnailListBox.SelectedItems.Count > 1)
+            {
+                // Prevent default selection behavior
+                e.Handled = true;
+                
+                // Force sync the selection to ViewModel before showing context menu
+                if (DataContext is MainViewModel vm)
+                {
+                    vm.SyncSelectedThumbnails(ThumbnailListBox.SelectedItems);
+                }
+                
+                // Manually show context menu at mouse position
+                if (ThumbnailListBox.ContextMenu != null)
+                {
+                    ThumbnailListBox.ContextMenu.PlacementTarget = ThumbnailListBox;
+                    ThumbnailListBox.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                    ThumbnailListBox.ContextMenu.IsOpen = true;
+                }
+            }
+            else if (!listBoxItem.IsSelected)
+            {
+                // Clicking on non-selected item - select it and clear others
+                ThumbnailListBox.SelectedItems.Clear();
+                listBoxItem.IsSelected = true;
+                
+                if (DataContext is MainViewModel vm)
+                {
+                    vm.SyncSelectedThumbnails(ThumbnailListBox.SelectedItems);
+                }
+            }
+            // If single item selected and clicking on it, let default behavior
         }
     }
 

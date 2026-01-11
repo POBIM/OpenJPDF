@@ -224,6 +224,7 @@ public partial class MainViewModel
         }
 
         SyncPageOrderToService();
+        LoadCurrentPage();
         HasPageOrderChanged = true;
         StatusMessage = $"{SelectedThumbnails.Count} page(s) moved up. Save to apply changes.";
     }
@@ -258,8 +259,135 @@ public partial class MainViewModel
         }
 
         SyncPageOrderToService();
+        LoadCurrentPage();
         HasPageOrderChanged = true;
         StatusMessage = $"{SelectedThumbnails.Count} page(s) moved down. Save to apply changes.";
+    }
+
+    /// <summary>
+    /// Move all selected pages to the beginning
+    /// </summary>
+    [RelayCommand]
+    private void MoveSelectedPagesToFirst()
+    {
+        if (SelectedThumbnails.Count == 0)
+        {
+            StatusMessage = "No pages selected";
+            return;
+        }
+
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        
+        // Get selected items in their current order
+        var selectedItems = SelectedThumbnails
+            .OrderBy(t => PageThumbnails.IndexOf(t))
+            .ToList();
+
+        // Get corresponding page images
+        var selectedIndices = selectedItems
+            .Select(t => PageThumbnails.IndexOf(t))
+            .Where(i => i >= 0)
+            .ToList();
+
+        var selectedPageImages = selectedIndices
+            .Where(idx => idx < pageImages.Count)
+            .Select(idx => pageImages[idx])
+            .ToList();
+
+        // Remove from current positions (in reverse order to maintain indices)
+        foreach (var item in selectedItems.AsEnumerable().Reverse())
+        {
+            PageThumbnails.Remove(item);
+        }
+        foreach (var idx in selectedIndices.OrderByDescending(i => i))
+        {
+            if (idx < pageImages.Count)
+                pageImages.RemoveAt(idx);
+        }
+
+        // Insert at beginning
+        for (int i = 0; i < selectedItems.Count; i++)
+        {
+            PageThumbnails.Insert(i, selectedItems[i]);
+        }
+        for (int i = 0; i < selectedPageImages.Count; i++)
+        {
+            pageImages.Insert(i, selectedPageImages[i]);
+        }
+
+        UpdatePageNumbers();
+        UpdatePageImageNumbers();
+        SyncPageOrderToService();
+        
+        // Navigate to first selected page
+        CurrentPageIndex = 0;
+        LoadCurrentPage();
+        
+        HasPageOrderChanged = true;
+        StatusMessage = $"{selectedItems.Count} page(s) moved to beginning. Save to apply changes.";
+    }
+
+    /// <summary>
+    /// Move all selected pages to the end
+    /// </summary>
+    [RelayCommand]
+    private void MoveSelectedPagesToLast()
+    {
+        if (SelectedThumbnails.Count == 0)
+        {
+            StatusMessage = "No pages selected";
+            return;
+        }
+
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        
+        // Get selected items in their current order
+        var selectedItems = SelectedThumbnails
+            .OrderBy(t => PageThumbnails.IndexOf(t))
+            .ToList();
+
+        // Get corresponding page images
+        var selectedIndices = selectedItems
+            .Select(t => PageThumbnails.IndexOf(t))
+            .Where(i => i >= 0)
+            .ToList();
+
+        var selectedPageImages = selectedIndices
+            .Where(idx => idx < pageImages.Count)
+            .Select(idx => pageImages[idx])
+            .ToList();
+
+        // Remove from current positions (in reverse order to maintain indices)
+        foreach (var item in selectedItems.AsEnumerable().Reverse())
+        {
+            PageThumbnails.Remove(item);
+        }
+        foreach (var idx in selectedIndices.OrderByDescending(i => i))
+        {
+            if (idx < pageImages.Count)
+                pageImages.RemoveAt(idx);
+        }
+
+        // Add at end
+        foreach (var item in selectedItems)
+        {
+            PageThumbnails.Add(item);
+        }
+        foreach (var pageImage in selectedPageImages)
+        {
+            pageImages.Add(pageImage);
+        }
+
+        UpdatePageNumbers();
+        UpdatePageImageNumbers();
+        SyncPageOrderToService();
+        
+        // Navigate to first of moved pages
+        CurrentPageIndex = PageThumbnails.Count - selectedItems.Count;
+        LoadCurrentPage();
+        
+        HasPageOrderChanged = true;
+        StatusMessage = $"{selectedItems.Count} page(s) moved to end. Save to apply changes.";
     }
 
     #endregion
@@ -293,6 +421,7 @@ public partial class MainViewModel
         if (result != MessageBoxResult.Yes) return;
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
 
         var sortedIndices = SelectedThumbnails
             .Select(t => PageThumbnails.IndexOf(t))
@@ -305,10 +434,17 @@ public partial class MainViewModel
         {
             pdfService.DeletePage(idx);
 
+            // Remove from PageThumbnails (sidebar)
             if (idx < PageThumbnails.Count)
             {
                 PageThumbnails.RemoveAt(idx);
                 deletedCount++;
+            }
+            
+            // Remove from PageImages (canvas/continuous scroll)
+            if (idx < pageImages.Count)
+            {
+                pageImages.RemoveAt(idx);
             }
 
             if (_pageRotations.ContainsKey(idx))
@@ -324,6 +460,7 @@ public partial class MainViewModel
         }
 
         UpdatePageNumbers();
+        UpdatePageImageNumbers();
         SelectedThumbnails.Clear();
         OnPropertyChanged(nameof(SelectedPagesCount));
         OnPropertyChanged(nameof(HasMultipleSelection));
@@ -333,6 +470,9 @@ public partial class MainViewModel
             CurrentPageIndex = Math.Max(0, PageThumbnails.Count - 1);
         }
 
+        // Force reload current page
+        LoadCurrentPage();
+        
         ClearAnnotationsRequested?.Invoke();
         RefreshAnnotationsRequested?.Invoke();
 
@@ -354,10 +494,23 @@ public partial class MainViewModel
             fromIndex == toIndex)
             return;
 
+        // Move in PageThumbnails (sidebar)
         var item = PageThumbnails[fromIndex];
         PageThumbnails.RemoveAt(fromIndex);
         PageThumbnails.Insert(toIndex, item);
+        
+        // Move in PageImages (canvas/continuous scroll)
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        if (fromIndex < pageImages.Count)
+        {
+            var pageImage = pageImages[fromIndex];
+            pageImages.RemoveAt(fromIndex);
+            int targetIndex = Math.Min(toIndex, pageImages.Count);
+            pageImages.Insert(targetIndex, pageImage);
+        }
+        
         UpdatePageNumbers();
+        UpdatePageImageNumbers();
     }
 
     /// <summary>
@@ -367,24 +520,59 @@ public partial class MainViewModel
     {
         if (SelectedThumbnails.Count == 0) return;
 
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        
+        // Get indices of selected items before removal
+        var selectedIndices = SelectedThumbnails
+            .Select(t => PageThumbnails.IndexOf(t))
+            .Where(idx => idx >= 0)
+            .OrderBy(idx => idx)
+            .ToList();
+        
         var selectedItems = SelectedThumbnails
             .OrderBy(t => PageThumbnails.IndexOf(t))
             .ToList();
 
+        // Collect PageImages that correspond to selected thumbnails
+        var selectedPageImages = selectedIndices
+            .Where(idx => idx < pageImages.Count)
+            .Select(idx => pageImages[idx])
+            .ToList();
+
+        // Remove from PageThumbnails
         foreach (var item in selectedItems)
         {
             PageThumbnails.Remove(item);
         }
+        
+        // Remove from PageImages (in reverse to maintain indices)
+        foreach (var idx in selectedIndices.OrderByDescending(i => i))
+        {
+            if (idx < pageImages.Count)
+            {
+                pageImages.RemoveAt(idx);
+            }
+        }
 
         targetIndex = Math.Min(targetIndex, PageThumbnails.Count);
 
+        // Insert into PageThumbnails
         for (int i = 0; i < selectedItems.Count; i++)
         {
             PageThumbnails.Insert(targetIndex + i, selectedItems[i]);
         }
+        
+        // Insert into PageImages
+        int pageImagesTargetIndex = Math.Min(targetIndex, pageImages.Count);
+        for (int i = 0; i < selectedPageImages.Count; i++)
+        {
+            pageImages.Insert(pageImagesTargetIndex + i, selectedPageImages[i]);
+        }
 
         UpdatePageNumbers();
+        UpdatePageImageNumbers();
         SyncPageOrderToService();
+        LoadCurrentPage();
         HasPageOrderChanged = true;
         StatusMessage = $"{selectedItems.Count} page(s) moved. Save to apply changes.";
     }
@@ -399,12 +587,26 @@ public partial class MainViewModel
             fromIndex == toIndex)
             return;
 
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+
+        // Move in PageThumbnails (sidebar)
         var item = PageThumbnails[fromIndex];
         PageThumbnails.RemoveAt(fromIndex);
         PageThumbnails.Insert(toIndex, item);
+        
+        // Move in PageImages (canvas/continuous scroll)
+        if (fromIndex < pageImages.Count)
+        {
+            var pageImage = pageImages[fromIndex];
+            pageImages.RemoveAt(fromIndex);
+            int targetIndex = Math.Min(toIndex, pageImages.Count);
+            pageImages.Insert(targetIndex, pageImage);
+        }
 
         UpdatePageNumbers();
+        UpdatePageImageNumbers();
         SyncPageOrderToService();
+        LoadCurrentPage();
         HasPageOrderChanged = true;
         StatusMessage = $"Page moved. Save to apply changes.";
     }
@@ -419,6 +621,19 @@ public partial class MainViewModel
             PageThumbnails[i].PageNumber = i + 1;
         }
         TotalPages = PageThumbnails.Count;
+    }
+    
+    /// <summary>
+    /// Update page indices in PageImages collection after reorder
+    /// </summary>
+    private void UpdatePageImageNumbers()
+    {
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        for (int i = 0; i < pageImages.Count; i++)
+        {
+            pageImages[i].PageIndex = i;
+            pageImages[i].PageNumber = i + 1;
+        }
     }
 
     /// <summary>

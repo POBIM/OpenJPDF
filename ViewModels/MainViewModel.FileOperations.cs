@@ -254,8 +254,18 @@ public partial class MainViewModel
                 if (i < tab.PageImages.Count && tab.PageImages[i].Image != null)
                     continue;
                 
+                // Get the ORIGINAL page index from the thumbnail at this position
+                int originalPageIndex = i;
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    if (i < tab.PageThumbnails.Count)
+                    {
+                        originalPageIndex = tab.PageThumbnails[i].OriginalPageIndex;
+                    }
+                });
+                
                 int rotation = tab.GetPageRotation(i);
-                var image = tab.PdfService.GetPageImage(i, scale, rotation);
+                var image = tab.PdfService.GetPageImage(originalPageIndex, scale, rotation);
                 var pageIdx = i;
                 
                 Application.Current?.Dispatcher.Invoke(() =>
@@ -290,10 +300,21 @@ public partial class MainViewModel
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        var pageThumbnails = ActiveDocument?.PageThumbnails ?? PageThumbnails;
 
         float scale = (float)ZoomScale;
         int rotation = GetPageRotation(CurrentPageIndex);
-        CurrentPageImage = pdfService.GetPageImage(CurrentPageIndex, scale, rotation);
+        
+        // Get the ORIGINAL page index from the thumbnail at current position
+        // This correctly handles reordering and duplications
+        int originalPageIndex = CurrentPageIndex;
+        if (CurrentPageIndex >= 0 && CurrentPageIndex < pageThumbnails.Count)
+        {
+            originalPageIndex = pageThumbnails[CurrentPageIndex].OriginalPageIndex;
+        }
+        
+        // Use ORIGINAL page index to render from PDF
+        CurrentPageImage = pdfService.GetPageImage(originalPageIndex, scale, rotation);
 
         // Also update the page in continuous scroll view
         if (CurrentPageIndex >= 0 && CurrentPageIndex < pageImages.Count)

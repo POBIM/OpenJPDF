@@ -901,4 +901,71 @@ public partial class MainViewModel
     }
 
     #endregion
+
+    #region Convert Annotation to Header/Footer
+
+    /// <summary>
+    /// Convert a text annotation to a CustomTextBox in Header/Footer system.
+    /// This allows the text to appear on all pages and be managed via Header/Footer dialog.
+    /// </summary>
+    /// <param name="annotation">The text annotation to convert</param>
+    public void ConvertAnnotationToHeaderFooter(AnnotationItem annotation)
+    {
+        if (annotation is not TextAnnotationItem textItem)
+        {
+            StatusMessage = "Only text annotations can be converted to Header/Footer (Image support coming soon)";
+            return;
+        }
+
+        // Create HeaderFooterConfig if not exists
+        if (HeaderFooterConfig == null)
+        {
+            HeaderFooterConfig = new HeaderFooterConfig();
+        }
+
+        // Get page dimensions for coordinate conversion
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        var (pageWidth, pageHeight) = pdfService.GetPageDimensions(CurrentPageIndex);
+
+        // Annotation.Y = distance from page top (in PDF points)
+        // CustomTextBox.OffsetY = distance from page bottom (in PDF points)
+        // Convert: OffsetY = pageHeight - annotation.Y
+        float pdfX = (float)textItem.X;
+        float pdfY = (float)(pageHeight - textItem.Y);
+
+        // Create CustomTextBox from annotation (auto-fit, no explicit width/height)
+        var customTextBox = new CustomTextBox
+        {
+            Label = string.IsNullOrWhiteSpace(textItem.Text) 
+                ? "Text Box" 
+                : (textItem.Text.Length > 20 ? textItem.Text.Substring(0, 20) + "..." : textItem.Text),
+            Text = textItem.Text,
+            OffsetX = pdfX,
+            OffsetY = pdfY,
+            FontFamily = textItem.FontFamily,
+            FontSize = textItem.FontSize,
+            Color = textItem.Color,
+            IsBold = textItem.IsBold,
+            IsItalic = textItem.IsItalic,
+            ShowBorder = false // No border for auto-fit
+        };
+
+        // Add to Header/Footer config
+        HeaderFooterConfig.CustomTextBoxes.Add(customTextBox);
+
+        // Remove the annotation (it's now managed by Header/Footer)
+        Annotations.Remove(annotation);
+
+        // Refresh displays
+        ClearAnnotationsRequested?.Invoke();
+        RefreshAnnotationsRequested?.Invoke();
+        RefreshHeaderFooterPreview?.Invoke();
+
+        // Notify property changed for HasHeaderFooter
+        OnPropertyChanged(nameof(HasHeaderFooter));
+
+        StatusMessage = $"Text added to Header/Footer. Click 'Edit H/F' to adjust position. Save to apply.";
+    }
+
+    #endregion
 }

@@ -250,6 +250,16 @@
                         <TextBlock Text="Header/Footer"/>
                     </StackPanel>
                 </Button>
+                <ToggleButton Style="{StaticResource ToolbarToggleButton}" 
+                              Command="{Binding ToggleEditHeaderFooterCommand}" 
+                              IsChecked="{Binding IsEditingHeaderFooter, Mode=OneWay}"
+                              IsEnabled="{Binding HasHeaderFooter}"
+                              ToolTip="Edit Header/Footer positions on canvas (drag to move)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="✏️" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Edit H/F"/>
+                    </StackPanel>
+                </ToggleButton>
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="8,4"/>
 
@@ -321,6 +331,7 @@
                              AllowDrop="True"
                              SelectionChanged="ThumbnailListBox_SelectionChanged"
                              PreviewMouseLeftButtonDown="ThumbnailListBox_PreviewMouseLeftButtonDown"
+                             PreviewMouseRightButtonDown="ThumbnailListBox_PreviewMouseRightButtonDown"
                              PreviewMouseMove="ThumbnailListBox_PreviewMouseMove"
                              PreviewKeyDown="ThumbnailListBox_PreviewKeyDown"
                              Drop="ThumbnailListBox_Drop"
@@ -328,83 +339,128 @@
                              DragLeave="ThumbnailListBox_DragLeave">
                         <ListBox.ContextMenu>
                             <ContextMenu>
-                                <!-- Selection Commands -->
+                                <!-- Selection Commands (Always visible) -->
                                 <MenuItem Header="Select All" Command="{Binding SelectAllPagesCommand}" InputGestureText="Ctrl+A">
                                     <MenuItem.Icon>
                                         <TextBlock Text="☑" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Clear Selection" Command="{Binding ClearPageSelectionCommand}">
+                                <MenuItem Header="Clear Selection" Command="{Binding ClearPageSelectionCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
                                     <MenuItem.Icon>
                                         <TextBlock Text="☐" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
                                 <Separator/>
                                 
-                                <!-- Multi-Select Batch Operations -->
-                                <MenuItem Header="Rotate Selected Right" Command="{Binding RotateSelectedPagesRightCommand}" InputGestureText="Ctrl+R">
-                                    <MenuItem.Icon>
-                                        <TextBlock Text="↻" FontSize="14"/>
-                                    </MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Rotate Selected Left" Command="{Binding RotateSelectedPagesLeftCommand}" InputGestureText="Ctrl+L">
-                                    <MenuItem.Icon>
-                                        <TextBlock Text="↺" FontSize="14"/>
-                                    </MenuItem.Icon>
-                                </MenuItem>
-                                <Separator/>
-                                <MenuItem Header="Move Selected Up" Command="{Binding MoveSelectedPagesUpCommand}">
+                                <!-- Multi-Select Batch Operations (Only when multiple selected) -->
+                                <MenuItem Header="{Binding SelectedPagesCount, StringFormat='📑 {0} Pages Selected'}" 
+                                          IsEnabled="False" FontWeight="SemiBold"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}"/>
+                                <MenuItem Header="Move Up" Command="{Binding MoveSelectedPagesUpCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
                                     <MenuItem.Icon>
                                         <TextBlock Text="⬆" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Move Selected Down" Command="{Binding MoveSelectedPagesDownCommand}">
+                                <MenuItem Header="Move Down" Command="{Binding MoveSelectedPagesDownCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
                                     <MenuItem.Icon>
                                         <TextBlock Text="⬇" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <Separator/>
-                                <MenuItem Header="Delete Selected" Command="{Binding DeleteSelectedPagesCommand}" InputGestureText="Del">
+                                <MenuItem Header="Move to First" Command="{Binding MoveSelectedPagesToFirstCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
                                     <MenuItem.Icon>
-                                        <TextBlock Text="🗑️" FontSize="12"/>
+                                        <TextBlock Text="⏫" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Extract Selected" Command="{Binding ExtractPagesCommand}" InputGestureText="Ctrl+E">
+                                <MenuItem Header="Move to Last" Command="{Binding MoveSelectedPagesToLastCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="⏬" FontSize="12"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <Separator Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}"/>
+                                <MenuItem Header="Rotate Right" Command="{Binding RotateSelectedPagesRightCommand}" InputGestureText="Ctrl+R"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="↻" FontSize="14"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Rotate Left" Command="{Binding RotateSelectedPagesLeftCommand}" InputGestureText="Ctrl+L"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="↺" FontSize="14"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <Separator Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}"/>
+                                <MenuItem Header="Extract Pages" Command="{Binding ExtractPagesCommand}" InputGestureText="Ctrl+E"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
                                     <MenuItem.Icon>
                                         <TextBlock Text="📤" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <Separator/>
+                                <MenuItem Header="Delete Pages" Command="{Binding DeleteSelectedPagesCommand}" InputGestureText="Del"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource BoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="🗑️" FontSize="12"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
 
-                                <!-- Single Page Operations -->
-                                <MenuItem Header="Single Page Actions" IsEnabled="False" FontWeight="SemiBold"/>
-                                <MenuItem Header="Move Up" Command="{Binding MovePageUpCommand}" InputGestureText="Ctrl+Up">
+                                <!-- Single Page Operations (Only when single selected) -->
+                                <MenuItem Header="Move Up" Command="{Binding MovePageUpCommand}" InputGestureText="Ctrl+Up"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
                                     <MenuItem.Icon>
-                                        <TextBlock Text="^" FontWeight="Bold"/>
+                                        <TextBlock Text="⬆" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Move Down" Command="{Binding MovePageDownCommand}" InputGestureText="Ctrl+Down">
+                                <MenuItem Header="Move Down" Command="{Binding MovePageDownCommand}" InputGestureText="Ctrl+Down"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
                                     <MenuItem.Icon>
-                                        <TextBlock Text="v" FontWeight="Bold"/>
+                                        <TextBlock Text="⬇" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Move to First" Command="{Binding MovePageToFirstCommand}">
+                                <MenuItem Header="Move to First" Command="{Binding MovePageToFirstCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
                                     <MenuItem.Icon>
-                                        <TextBlock Text="|^" FontWeight="Bold"/>
+                                        <TextBlock Text="⏫" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Move to Last" Command="{Binding MovePageToLastCommand}">
+                                <MenuItem Header="Move to Last" Command="{Binding MovePageToLastCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
                                     <MenuItem.Icon>
-                                        <TextBlock Text="|v" FontWeight="Bold"/>
+                                        <TextBlock Text="⏬" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <Separator/>
-                                <MenuItem Header="Duplicate Page" Command="{Binding DuplicatePageCommand}" InputGestureText="Ctrl+D">
+                                <Separator Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}"/>
+                                <MenuItem Header="Rotate Right" Command="{Binding RotatePageRightCommand}" InputGestureText="Ctrl+R"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="↻" FontSize="14"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Rotate Left" Command="{Binding RotatePageLeftCommand}" InputGestureText="Ctrl+L"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="↺" FontSize="14"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <Separator Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}"/>
+                                <MenuItem Header="Duplicate Page" Command="{Binding DuplicatePageCommand}" InputGestureText="Ctrl+D"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
                                     <MenuItem.Icon>
                                         <TextBlock Text="📋" FontSize="12"/>
                                     </MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Delete Page" Command="{Binding DeletePageCommand}">
+                                <MenuItem Header="Extract Page" Command="{Binding ExtractPagesCommand}" InputGestureText="Ctrl+E"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
+                                    <MenuItem.Icon>
+                                        <TextBlock Text="📤" FontSize="12"/>
+                                    </MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Delete Page" Command="{Binding DeletePageCommand}"
+                                          Visibility="{Binding HasMultipleSelection, Converter={StaticResource InverseBoolToVisibility}}">
                                     <MenuItem.Icon>
                                         <TextBlock Text="🗑️" FontSize="12"/>
                                     </MenuItem.Icon>

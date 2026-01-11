@@ -165,13 +165,28 @@ public partial class MainViewModel
         if (result == MessageBoxResult.Yes)
         {
             var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+            var pageImages = ActiveDocument?.PageImages ?? PageImages;
             int deletedIndex = CurrentPageIndex;
             
             pdfService.DeletePage(deletedIndex);
             
+            // Remove from PageThumbnails (sidebar)
             if (deletedIndex < PageThumbnails.Count)
             {
                 PageThumbnails.RemoveAt(deletedIndex);
+            }
+            
+            // Remove from PageImages (canvas/continuous scroll)
+            if (deletedIndex < pageImages.Count)
+            {
+                pageImages.RemoveAt(deletedIndex);
+                
+                // Update page indices in remaining PageImages
+                for (int i = deletedIndex; i < pageImages.Count; i++)
+                {
+                    pageImages[i].PageIndex = i;
+                    pageImages[i].PageNumber = i + 1;
+                }
             }
             
             UpdatePageNumbers();
@@ -210,6 +225,9 @@ public partial class MainViewModel
                 CurrentPageIndex = tempIndex;
             }
             
+            // Force reload current page
+            LoadCurrentPage();
+            
             ClearAnnotationsRequested?.Invoke();
             RefreshAnnotationsRequested?.Invoke();
             
@@ -224,10 +242,12 @@ public partial class MainViewModel
         if (!IsFileLoaded) return;
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
         int sourceIndex = CurrentPageIndex;
         
         pdfService.DuplicatePage(sourceIndex);
         
+        // Update PageThumbnails (sidebar)
         var sourceThumbnail = PageThumbnails[sourceIndex];
         var newThumbnail = new PageThumbnail
         {
@@ -242,6 +262,18 @@ public partial class MainViewModel
         }
         
         PageThumbnails.Insert(sourceIndex + 1, newThumbnail);
+        
+        // Update PageImages (canvas/continuous scroll) - copy source image as placeholder
+        var sourcePageImage = sourceIndex < pageImages.Count ? pageImages[sourceIndex].Image : null;
+        var newPageImage = new PageImage(sourceIndex + 1, sourcePageImage);
+        pageImages.Insert(sourceIndex + 1, newPageImage);
+        
+        // Update page indices in PageImages collection
+        for (int i = sourceIndex + 2; i < pageImages.Count; i++)
+        {
+            pageImages[i].PageIndex = i;
+            pageImages[i].PageNumber = i + 1;
+        }
         
         UpdatePageNumbers();
         
@@ -258,7 +290,9 @@ public partial class MainViewModel
             ann.PageNumber++;
         }
         
+        // Navigate to duplicated page and force reload
         CurrentPageIndex = sourceIndex + 1;
+        LoadCurrentPage();
         
         HasPageOrderChanged = true;
         StatusMessage = $"Page {sourceIndex + 1} duplicated. Save to apply changes permanently.";

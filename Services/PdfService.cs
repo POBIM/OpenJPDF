@@ -125,7 +125,7 @@ public class PdfService : IPdfService, IDisposable
 
     public BitmapSource? GetPageImage(int pageNumber, float scale = 1.0f, int rotation = 0)
     {
-        if (_pdfBytes == null || pageNumber < 0 || pageNumber >= PageCount)
+        if (_pdfBytes == null || pageNumber < 0 || pageNumber >= _pageCount)
             return null;
 
         // Check cache first
@@ -162,11 +162,11 @@ public class PdfService : IPdfService, IDisposable
                 Rotation = pdfRotation
             };
             
+            // Render the page (ViewModel already provides the original page index)
             using var skBitmap = Conversion.ToImage(memStream, pageNumber, options: options);
             
             if (skBitmap == null)
             {
-                System.Diagnostics.Debug.WriteLine($"ERROR: PDFtoImage returned null bitmap for page {pageNumber}");
                 return null;
             }
             
@@ -215,14 +215,13 @@ public class PdfService : IPdfService, IDisposable
 
     public BitmapSource? GetPageThumbnail(int pageNumber, int rotation = 0)
     {
-        if (_pdfBytes == null || pageNumber < 0 || pageNumber >= PageCount)
+        if (_pdfBytes == null || pageNumber < 0 || pageNumber >= _pageCount)
             return null;
 
         // Check cache first
         string cacheKey = PageCache.GetThumbnailKey(pageNumber, rotation);
         if (_thumbnailCache.TryGet(cacheKey, out var cachedImage))
         {
-            System.Diagnostics.Debug.WriteLine($"[CACHE HIT] Thumbnail {pageNumber} (rot={rotation})");
             return cachedImage;
         }
 
@@ -252,7 +251,6 @@ public class PdfService : IPdfService, IDisposable
             
             if (skBitmap == null)
             {
-                System.Diagnostics.Debug.WriteLine($"ERROR: PDFtoImage returned null bitmap for thumbnail page {pageNumber}");
                 return null;
             }
             
@@ -441,7 +439,7 @@ public class PdfService : IPdfService, IDisposable
     /// </summary>
     public (float width, float height) GetPageDimensions(int pageNumber)
     {
-        if (_pdfBytes == null || pageNumber < 0 || pageNumber >= PageCount)
+        if (_pdfBytes == null || pageNumber < 0 || pageNumber >= _pageCount)
             return (0, 0);
 
         try
@@ -466,11 +464,13 @@ public class PdfService : IPdfService, IDisposable
     public void DeletePage(int pageNumber)
     {
         _deletedPages.Add(pageNumber);
+        _pageCache.Clear();
     }
 
     public void DuplicatePage(int pageNumber)
     {
         _duplicatedPages.Add(pageNumber);
+        _pageCache.Clear();
     }
 
     /// <summary>
@@ -1576,6 +1576,7 @@ public class PdfService : IPdfService, IDisposable
     public void SetPageOrder(int[] pageOrder)
     {
         _pageOrder = pageOrder;
+        _pageCache.Clear();
     }
 
     /// <summary>

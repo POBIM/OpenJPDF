@@ -31,7 +31,8 @@ public enum EditMode
     AddLine,
     SelectText,     // OCR selection mode
     SelectContent,  // Select extracted content from original PDF
-    ScreenCapture   // Capture screen area as image annotation
+    ScreenCapture,  // Capture screen area as image annotation
+    EditHeaderFooter // Edit Header/Footer mode - drag CustomTextBox positions
 }
 
 /// <summary>
@@ -244,6 +245,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public bool HasHeaderFooter => HeaderFooterConfig != null && 
         (HeaderFooterConfig.HeaderEnabled || HeaderFooterConfig.FooterEnabled || HeaderFooterConfig.CustomTextBoxes.Count > 0);
 
+    /// <summary>
+    /// Whether we're in Edit Header/Footer mode (CustomTextBox shown as temporary annotations)
+    /// </summary>
+    public bool IsEditingHeaderFooter => CurrentEditMode == EditMode.EditHeaderFooter;
+
     #endregion
 
     #region Static Data - Font/Color Options
@@ -400,6 +406,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             
             RefreshAnnotationsRequested?.Invoke();
+            
+            // Refresh header/footer preview for new page (fixes issue where header doesn't render until zoom)
+            RefreshHeaderFooterPreview?.Invoke();
 
             // Update extracted content for new page
             OnPageChangedUpdateExtractedContent();
@@ -596,10 +605,177 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ClearHeaderFooter()
     {
+        // Exit edit mode first if active
+        if (CurrentEditMode == EditMode.EditHeaderFooter)
+        {
+            _tempHeaderFooterAnnotations.Clear();
+            CurrentEditMode = EditMode.None;
+        }
+        
         HeaderFooterConfig = null;
         OnPropertyChanged(nameof(HasHeaderFooter));
+        OnPropertyChanged(nameof(IsEditingHeaderFooter));
         RefreshHeaderFooterPreview?.Invoke();
+        RefreshAnnotationsRequested?.Invoke();
         StatusMessage = "Header/Footer cleared.";
+    }
+
+    // Track temporary annotations created during Edit H/F mode
+    private readonly List<TextAnnotationItem> _tempHeaderFooterAnnotations = new();
+
+    [RelayCommand]
+    private void ToggleEditHeaderFooter()
+    {
+        if (!IsFileLoaded)
+        {
+            StatusMessage = "Please open a PDF file first.";
+            return;
+        }
+
+        if (!HasHeaderFooter)
+        {
+            StatusMessage = "No Header/Footer configured. Add text via 'Header/Footer' dialog or right-click annotation.";
+            return;
+        }
+
+        if (CurrentEditMode == EditMode.EditHeaderFooter)
+        {
+            // Exit Edit Header/Footer mode - save changes back to CustomTextBox
+            ExitEditHeaderFooterMode();
+        }
+        else
+        {
+            // Enter Edit Header/Footer mode - convert CustomTextBox to annotations
+            EnterEditHeaderFooterMode();
+        }
+
+        OnPropertyChanged(nameof(IsEditingHeaderFooter));
+    }
+
+    /// <summary>
+    /// Enter Edit Header/Footer mode - convert CustomTextBox to temporary TextAnnotations
+    /// </summary>
+    private void EnterEditHeaderFooterMode()
+    {
+        if (HeaderFooterConfig == null) return;
+
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(CurrentPageIndex);
+
+        // Get scale factor: annotation uses ZoomScale, CustomTextBox uses actual PDF points
+        // annotation.X/Y = screenPixels / ZoomScale (NOT real PDF points!)
+        // PDF points = screenPixels / pixelsPerPoint
+        // 
+        // Relationship:
+        // screenPixels = PDF_X * pixelsPerPoint
+        // annotation.X = screenPixels / ZoomScale = PDF_X * pixelsPerPoint / ZoomScale
+        // 
+        // So to convert PDF points to annotation coordinates:
+        // annotation.X = PDF_X * (pixelsPerPoint / ZoomScale)
+        // annotation.Y = (pageHeightPts - PDF_OffsetY) * (pixelsPerPoint / ZoomScale)
+
+        // Calculate pixelsPerPoint from rendered image
+        double pixelsPerPoint = GetPixelsPerPoint();
+        double scaleFactor = pixelsPerPoint / ZoomScale;
+
+        // Convert each CustomTextBox to a temporary TextAnnotation
+        foreach (var textBox in HeaderFooterConfig.CustomTextBoxes)
+        {
+            // Convert PDF coordinates to annotation coordinates
+            double annotationX = textBox.OffsetX * scaleFactor;
+            double annotationY = (pageHeightPts - textBox.OffsetY) * scaleFactor;
+
+            var annotation = new TextAnnotationItem
+            {
+                PageNumber = CurrentPageIndex,
+                X = annotationX,
+                Y = annotationY,
+                Text = textBox.Text,
+                FontFamily = textBox.FontFamily,
+                FontSize = textBox.FontSize,
+                Color = textBox.Color,
+                IsBold = textBox.IsBold,
+                IsItalic = textBox.IsItalic,
+                BackgroundColor = "#C8E6C9", // Light green to indicate H/F edit mode
+                BorderColor = "#4CAF50",
+                BorderWidth = 2
+            };
+
+            _tempHeaderFooterAnnotations.Add(annotation);
+            Annotations.Add(annotation);
+        }
+
+        CurrentEditMode = EditMode.EditHeaderFooter;
+        
+        // Hide normal H/F preview, show as annotations
+        RefreshHeaderFooterPreview?.Invoke();
+        RefreshAnnotationsRequested?.Invoke();
+        
+        StatusMessage = "Edit Header/Footer: Drag to move, double-click to edit text. Click 'Edit H/F' again to save.";
+    }
+
+    /// <summary>
+    /// Exit Edit Header/Footer mode - save annotation positions back to CustomTextBox
+    /// </summary>
+    private void ExitEditHeaderFooterMode()
+    {
+        if (HeaderFooterConfig == null) return;
+
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(CurrentPageIndex);
+
+        // Get scale factor for conversion
+        double pixelsPerPoint = GetPixelsPerPoint();
+        double scaleFactor = pixelsPerPoint / ZoomScale;
+
+        // Update CustomTextBox from annotations
+        for (int i = 0; i < _tempHeaderFooterAnnotations.Count && i < HeaderFooterConfig.CustomTextBoxes.Count; i++)
+        {
+            var annotation = _tempHeaderFooterAnnotations[i];
+            var textBox = HeaderFooterConfig.CustomTextBoxes[i];
+
+            // Convert annotation coordinates back to PDF coordinates
+            // PDF_X = annotation.X / scaleFactor
+            // PDF_OffsetY = pageHeightPts - (annotation.Y / scaleFactor)
+            float pdfX = (float)(annotation.X / scaleFactor);
+            float pdfY = (float)(pageHeightPts - (annotation.Y / scaleFactor));
+
+            // Update position and text
+            textBox.OffsetX = pdfX;
+            textBox.OffsetY = pdfY;
+            textBox.Text = annotation.Text;
+            textBox.FontFamily = annotation.FontFamily;
+            textBox.FontSize = annotation.FontSize;
+            textBox.Color = annotation.Color;
+            textBox.IsBold = annotation.IsBold;
+            textBox.IsItalic = annotation.IsItalic;
+        }
+
+        // Remove temporary annotations
+        foreach (var annotation in _tempHeaderFooterAnnotations)
+        {
+            Annotations.Remove(annotation);
+        }
+        _tempHeaderFooterAnnotations.Clear();
+
+        CurrentEditMode = EditMode.None;
+        
+        // Refresh to show normal H/F preview
+        ClearAnnotationsRequested?.Invoke();
+        RefreshAnnotationsRequested?.Invoke();
+        RefreshHeaderFooterPreview?.Invoke();
+        
+        StatusMessage = "Header/Footer updated. Save to apply changes.";
+    }
+
+    /// <summary>
+    /// Get pixels per point for current rendered image (requested via event)
+    /// </summary>
+    public Func<double>? GetPixelsPerPointFunc { get; set; }
+    
+    private double GetPixelsPerPoint()
+    {
+        return GetPixelsPerPointFunc?.Invoke() ?? ZoomScale;
     }
 
     /// <summary>
