@@ -1,0 +1,92 @@
+<Window x:Class="OpenJPDF.Views.CalibrationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:models="clr-namespace:OpenJPDF.Models"
+        Title="Calibrate Measurement" 
+        Height="340" Width="420"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Padding" Value="5,3"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Padding" Value="5,3"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="20"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="Set Reference Measurement" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBlock Text="Enter the real-world length of the line you drew:" 
+                       TextWrapping="Wrap" Foreground="#666"/>
+        </StackPanel>
+        
+        <!-- Reference Line Info -->
+        <Border Grid.Row="2" Background="#F5F5F5" CornerRadius="4" Padding="10" Margin="0,0,0,15">
+            <StackPanel>
+                <TextBlock Text="Reference Line Length:" FontWeight="SemiBold"/>
+                <TextBlock x:Name="PixelLengthText" Text="0 pixels" FontSize="14" Foreground="#0066CC"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- Input Fields -->
+        <Grid Grid.Row="3" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="100"/>
+            </Grid.ColumnDefinitions>
+            
+            <TextBlock Grid.Column="0" Text="Real Length:"/>
+            <TextBox Grid.Column="1" x:Name="RealLengthInput" Text="1" 
+                     PreviewTextInput="NumberValidation"/>
+            <ComboBox Grid.Column="3" x:Name="UnitComboBox" SelectedIndex="1">
+                <ComboBoxItem Content="mm" Tag="{x:Static models:MeasurementUnit.Millimeters}"/>
+                <ComboBoxItem Content="cm" Tag="{x:Static models:MeasurementUnit.Centimeters}"/>
+                <ComboBoxItem Content="m" Tag="{x:Static models:MeasurementUnit.Meters}"/>
+                <ComboBoxItem Content="in" Tag="{x:Static models:MeasurementUnit.Inches}"/>
+                <ComboBoxItem Content="ft" Tag="{x:Static models:MeasurementUnit.Feet}"/>
+                <ComboBoxItem Content="pt" Tag="{x:Static models:MeasurementUnit.Points}"/>
+                <ComboBoxItem Content="px" Tag="{x:Static models:MeasurementUnit.Pixels}"/>
+            </ComboBox>
+        </Grid>
+        
+        <!-- Scale Preview -->
+        <Border Grid.Row="4" Background="#E8F4E8" CornerRadius="4" Padding="10">
+            <StackPanel>
+                <TextBlock Text="Scale Factor:" FontWeight="SemiBold"/>
+                <TextBlock x:Name="ScalePreviewText" Text="1 cm = 100 pixels" FontSize="14" Foreground="#228B22"/>
+            </StackPanel>
+        </Border>
+        
+        <!-- Buttons -->
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" Width="80" Height="30" Margin="0,0,10,0" 
+                    Click="CancelButton_Click"/>
+            <Button Content="Apply" Width="80" Height="30" 
+                    Click="ApplyButton_Click" IsDefault="True"
+                    Background="#0066CC" Foreground="White"/>
+        </StackPanel>
+    </Grid>
+</Window>

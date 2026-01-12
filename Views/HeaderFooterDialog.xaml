@@ -257,6 +257,42 @@
                                                     <CheckBox Content="I" IsChecked="{Binding IsItalic}" FontStyle="Italic" VerticalAlignment="Center" ToolTip="Italic"/>
                                                 </StackPanel>
                                                 <CheckBox Content="Show Border" IsChecked="{Binding ShowBorder}" Margin="0,2,0,0"/>
+                                                
+                                                <!-- Rotation -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,6,0,4">
+                                                    <TextBlock Text="Rotation:" Width="55" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding Rotation, UpdateSourceTrigger=PropertyChanged}" Width="45" Margin="0,0,4,0"/>
+                                                    <TextBlock Text="°" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                
+                                                <!-- Page Scope -->
+                                                <TextBlock Text="Show on:" FontWeight="SemiBold" Margin="0,4,0,4" FontSize="11"/>
+                                                <ComboBox SelectedValue="{Binding PageScope, UpdateSourceTrigger=PropertyChanged}" 
+                                                          SelectedValuePath="Tag" Width="130" HorizontalAlignment="Left">
+                                                    <ComboBoxItem Content="All Pages" Tag="{x:Static models:PageScope.AllPages}"/>
+                                                    <ComboBoxItem Content="First Page Only" Tag="{x:Static models:PageScope.FirstPageOnly}"/>
+                                                    <ComboBoxItem Content="Last Page Only" Tag="{x:Static models:PageScope.LastPageOnly}"/>
+                                                    <ComboBoxItem Content="Odd Pages" Tag="{x:Static models:PageScope.OddPagesOnly}"/>
+                                                    <ComboBoxItem Content="Even Pages" Tag="{x:Static models:PageScope.EvenPagesOnly}"/>
+                                                    <ComboBoxItem Content="Custom Range" Tag="{x:Static models:PageScope.CustomRange}"/>
+                                                </ComboBox>
+                                                <!-- Custom Page Range (visible when CustomRange selected) -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding PageScope}" Value="{x:Static models:PageScope.CustomRange}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <TextBlock Text="From:" Width="35" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding StartPage, UpdateSourceTrigger=PropertyChanged}" Width="40" Margin="0,0,8,0"/>
+                                                    <TextBlock Text="To:" Width="25" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding EndPage, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                                                </StackPanel>
                                             </StackPanel>
                                             
                                             <!-- Center: Multiline Text -->
@@ -271,11 +307,148 @@
                                                            Foreground="#888" FontSize="10" Margin="0,4,0,0"/>
                                             </StackPanel>
                                             
-                                            <!-- Right: Delete Button -->
-                                            <Button Grid.Column="2" Content="✕" 
-                                                    Click="RemoveTextBox_Click" Tag="{Binding}"
-                                                    Width="30" Height="30" VerticalAlignment="Top" Margin="12,0,0,0"
-                                                    Background="#FF5252" Foreground="White" FontWeight="Bold"/>
+                                            <!-- Right: Actions -->
+                                            <StackPanel Grid.Column="2" VerticalAlignment="Top" Margin="12,0,0,0">
+                                                <Button Content="✕" 
+                                                        Click="RemoveTextBox_Click" Tag="{Binding}"
+                                                        Width="30" Height="30" Margin="0,0,0,4"
+                                                        Background="#FF5252" Foreground="White" FontWeight="Bold"
+                                                        ToolTip="Delete"/>
+                                                <Button Content="🖼️" 
+                                                        Click="ConvertToImageBox_Click" Tag="{Binding}"
+                                                        Width="30" Height="30"
+                                                        Background="#9C27B0" Foreground="White" FontWeight="Bold"
+                                                        ToolTip="Convert to Image Box"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Custom Image Boxes Section -->
+                <Border Background="White" CornerRadius="8" Padding="16" Margin="0,16,0,0">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock Text="Custom Image Boxes" Style="{StaticResource SectionHeader}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                            <Button x:Name="AddImageBoxBtn" Content="+ Add Image" Click="AddImageBox_Click" 
+                                    Padding="12,4" Background="#2196F3" Foreground="White" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <TextBlock Text="Add logos, watermarks, stamps, or any image at specific positions on pages." 
+                                   Foreground="#666666" FontSize="11" Margin="0,0,0,12" TextWrapping="Wrap"/>
+                        
+                        <!-- Custom Image Boxes List -->
+                        <ItemsControl x:Name="CustomImageBoxesList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#F0F8FF" CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            
+                                            <!-- Left: Settings -->
+                                            <StackPanel Grid.Column="0" Margin="0,0,16,0" Width="220">
+                                                <!-- Label -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                    <TextBlock Text="Label:" Width="55" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
+                                                </StackPanel>
+                                                
+                                                <!-- Position -->
+                                                <TextBlock Text="Position (points):" FontWeight="SemiBold" Margin="0,4,0,4" FontSize="11"/>
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                    <TextBlock Text="X:" Width="25" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding OffsetX, UpdateSourceTrigger=PropertyChanged}" Width="55" Margin="0,0,10,0"/>
+                                                    <TextBlock Text="Y:" Width="25" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding OffsetY, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                                                </StackPanel>
+                                                
+                                                <!-- Image Size -->
+                                                <TextBlock Text="Size (points):" FontWeight="SemiBold" Margin="0,4,0,4" FontSize="11"/>
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                    <TextBlock Text="W:" Width="25" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding Width, UpdateSourceTrigger=PropertyChanged}" Width="55" Margin="0,0,10,0"/>
+                                                    <TextBlock Text="H:" Width="25" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding Height, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                                                </StackPanel>
+                                                
+                                                <!-- Rotation -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                    <TextBlock Text="Rotation:" Width="55" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding Rotation, UpdateSourceTrigger=PropertyChanged}" Width="45" Margin="0,0,4,0"/>
+                                                    <TextBlock Text="°" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                
+                                                <!-- Opacity -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                    <TextBlock Text="Opacity:" Width="55" VerticalAlignment="Center"/>
+                                                    <Slider Value="{Binding Opacity, UpdateSourceTrigger=PropertyChanged}" 
+                                                            Minimum="0.1" Maximum="1.0" Width="80" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding Opacity, StringFormat={}{0:P0}}" Width="40" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                
+                                                <!-- Page Scope -->
+                                                <TextBlock Text="Show on:" FontWeight="SemiBold" Margin="0,4,0,4" FontSize="11"/>
+                                                <ComboBox SelectedValue="{Binding PageScope, UpdateSourceTrigger=PropertyChanged}" 
+                                                          SelectedValuePath="Tag" Width="130" HorizontalAlignment="Left">
+                                                    <ComboBoxItem Content="All Pages" Tag="{x:Static models:PageScope.AllPages}"/>
+                                                    <ComboBoxItem Content="First Page Only" Tag="{x:Static models:PageScope.FirstPageOnly}"/>
+                                                    <ComboBoxItem Content="Last Page Only" Tag="{x:Static models:PageScope.LastPageOnly}"/>
+                                                    <ComboBoxItem Content="Odd Pages" Tag="{x:Static models:PageScope.OddPagesOnly}"/>
+                                                    <ComboBoxItem Content="Even Pages" Tag="{x:Static models:PageScope.EvenPagesOnly}"/>
+                                                    <ComboBoxItem Content="Custom Range" Tag="{x:Static models:PageScope.CustomRange}"/>
+                                                </ComboBox>
+                                                <!-- Custom Page Range (visible when CustomRange selected) -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding PageScope}" Value="{x:Static models:PageScope.CustomRange}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <TextBlock Text="From:" Width="35" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding StartPage, UpdateSourceTrigger=PropertyChanged}" Width="40" Margin="0,0,8,0"/>
+                                                    <TextBlock Text="To:" Width="25" VerticalAlignment="Center"/>
+                                                    <TextBox Text="{Binding EndPage, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                            
+                                            <!-- Center: Image Preview & Path -->
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="Image:" FontWeight="SemiBold" Margin="0,0,0,4" FontSize="11"/>
+                                                <Button Content="Select Image..." Click="SelectCustomImage_Click" Tag="{Binding}"
+                                                        Padding="8,4" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                                                <TextBlock Text="{Binding ImagePath}" FontSize="10" TextTrimming="CharacterEllipsis" 
+                                                           Foreground="#666" Margin="0,0,0,8" ToolTip="{Binding ImagePath}"/>
+                                                <!-- Image Preview -->
+                                                <Border BorderBrush="#DDD" BorderThickness="1" MaxWidth="200" MaxHeight="100" HorizontalAlignment="Left">
+                                                    <Image Source="{Binding ImagePath}" Stretch="Uniform" 
+                                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                </Border>
+                                            </StackPanel>
+                                            
+                                            <!-- Right: Actions -->
+                                            <StackPanel Grid.Column="2" VerticalAlignment="Top" Margin="12,0,0,0">
+                                                <Button Content="✕" 
+                                                        Click="RemoveImageBox_Click" Tag="{Binding}"
+                                                        Width="30" Height="30" Margin="0,0,0,4"
+                                                        Background="#FF5252" Foreground="White" FontWeight="Bold"
+                                                        ToolTip="Delete"/>
+                                                <Button Content="📝" 
+                                                        Click="ConvertToTextBox_Click" Tag="{Binding}"
+                                                        Width="30" Height="30"
+                                                        Background="#FF9800" Foreground="White" FontWeight="Bold"
+                                                        ToolTip="Convert to Text Box"/>
+                                            </StackPanel>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>

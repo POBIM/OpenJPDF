@@ -14,4 +14,9 @@ public class ImageAnnotation
     public double Width { get; set; }
     public double Height { get; set; }
     public string ImagePath { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Rotation angle in degrees (0-360)
+    /// </summary>
+    public double Rotation { get; set; }
 }

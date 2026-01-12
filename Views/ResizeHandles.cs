@@ -27,7 +27,7 @@ using WpfOrientation = System.Windows.Controls.Orientation;
 namespace OpenJPDF.Views;
 
 /// <summary>
-/// Enum representing the 8 resize handle positions
+/// Enum representing the 8 resize handle positions plus rotation handle
 /// </summary>
 public enum ResizeHandlePosition
 {
@@ -38,7 +38,8 @@ public enum ResizeHandlePosition
     MiddleRight,
     BottomLeft,
     BottomCenter,
-    BottomRight
+    BottomRight,
+    Rotation
 }
 
 /// <summary>
@@ -57,6 +58,15 @@ public class ResizeHandlesManager
     private bool _isResizing;
     private WpfPoint _resizeStartPoint;
     private double _originalX, _originalY, _originalWidth, _originalHeight;
+    
+    // Rotation handle state
+    private Ellipse? _rotationHandle;
+    private Line? _rotationLine;
+    private bool _isRotating;
+    private double _originalRotation;
+    private WpfPoint _rotationCenter;
+    private const double RotationHandleDistance = 30; // Distance above element
+    private const double RotationHandleSize = 12;
     
     private const double HandleSize = 8;
     private const double HalfHandleSize = HandleSize / 2;
@@ -95,16 +105,29 @@ public class ResizeHandlesManager
         _targetElement = element;
         _targetAnnotation = annotation;
         
+        double left = Canvas.GetLeft(element);
+        double top = Canvas.GetTop(element);
+        double width = element.ActualWidth > 0 ? element.ActualWidth : element.Width;
+        double height = element.ActualHeight > 0 ? element.ActualHeight : element.Height;
+        
+        // For text annotations, show only rotation handle (no resize)
+        if (annotation is TextAnnotationItem textAnn)
+        {
+            if (double.IsNaN(width) || width <= 0) width = textAnn.Width * _viewModel.ZoomScale;
+            if (double.IsNaN(height) || height <= 0) height = textAnn.Height * _viewModel.ZoomScale;
+            if (width <= 0) width = 100;
+            if (height <= 0) height = 30;
+            
+            // Only create rotation handle for text (no resize handles)
+            CreateRotationHandle(left, top, width, height);
+            return;
+        }
+        
         // Only show resize handles for resizable annotations (Image and Shape)
         if (annotation is not ImageAnnotationItem && annotation is not ShapeAnnotationItem)
         {
             return;
         }
-        
-        double left = Canvas.GetLeft(element);
-        double top = Canvas.GetTop(element);
-        double width = element.ActualWidth > 0 ? element.ActualWidth : element.Width;
-        double height = element.ActualHeight > 0 ? element.ActualHeight : element.Height;
         
         if (double.IsNaN(width) || double.IsNaN(height) || width <= 0 || height <= 0)
         {
@@ -134,6 +157,9 @@ public class ResizeHandlesManager
         CreateHandle(ResizeHandlePosition.BottomLeft, left - HalfHandleSize, top + height - HalfHandleSize, WpfCursors.SizeNESW);
         CreateHandle(ResizeHandlePosition.BottomCenter, left + width / 2 - HalfHandleSize, top + height - HalfHandleSize, WpfCursors.SizeNS);
         CreateHandle(ResizeHandlePosition.BottomRight, left + width - HalfHandleSize, top + height - HalfHandleSize, WpfCursors.SizeNWSE);
+        
+        // Create rotation handle (circle above top-center)
+        CreateRotationHandle(left, top, width, height);
     }
     
     /// <summary>
@@ -147,6 +173,19 @@ public class ResizeHandlesManager
             _canvas.Children.Remove(handle);
         }
         _handles.Clear();
+        
+        // Remove rotation handle
+        if (_rotationHandle != null)
+        {
+            _canvas.Children.Remove(_rotationHandle);
+            _rotationHandle = null;
+        }
+        if (_rotationLine != null)
+        {
+            _canvas.Children.Remove(_rotationLine);
+            _rotationLine = null;
+        }
+        
         _targetElement = null;
         _targetAnnotation = null;
     }
@@ -397,6 +436,236 @@ public class ResizeHandlesManager
         
         _canvas.Children.Add(handle);
         _handles.Add(handle);
+    }
+    
+    /// <summary>
+    /// Create rotation handle (circle) above the element with connecting line
+    /// </summary>
+    private void CreateRotationHandle(double left, double top, double width, double height)
+    {
+        // Remove existing rotation handle if any
+        if (_rotationHandle != null)
+        {
+            _canvas.Children.Remove(_rotationHandle);
+            _rotationHandle = null;
+        }
+        if (_rotationLine != null)
+        {
+            _canvas.Children.Remove(_rotationLine);
+            _rotationLine = null;
+        }
+        
+        double centerX = left + width / 2;
+        double handleY = top - RotationHandleDistance;
+        
+        // Create connecting line from top-center to rotation handle
+        _rotationLine = new Line
+        {
+            X1 = centerX,
+            Y1 = top,
+            X2 = centerX,
+            Y2 = handleY + RotationHandleSize / 2,
+            Stroke = HandleFillBrush,
+            StrokeThickness = 1.5,
+            IsHitTestVisible = false
+        };
+        WpfPanel.SetZIndex(_rotationLine, 999);
+        _canvas.Children.Add(_rotationLine);
+        
+        // Create rotation handle (circle)
+        _rotationHandle = new Ellipse
+        {
+            Width = RotationHandleSize,
+            Height = RotationHandleSize,
+            Fill = new SolidColorBrush(WpfColor.FromRgb(76, 175, 80)), // Green for rotation
+            Stroke = HandleStrokeBrush,
+            StrokeThickness = 1.5,
+            Cursor = WpfCursors.Hand,
+            Tag = ResizeHandlePosition.Rotation
+        };
+        
+        Canvas.SetLeft(_rotationHandle, centerX - RotationHandleSize / 2);
+        Canvas.SetTop(_rotationHandle, handleY);
+        WpfPanel.SetZIndex(_rotationHandle, 1001);
+        
+        _rotationHandle.MouseLeftButtonDown += RotationHandle_MouseLeftButtonDown;
+        _rotationHandle.MouseMove += RotationHandle_MouseMove;
+        _rotationHandle.MouseLeftButtonUp += RotationHandle_MouseLeftButtonUp;
+        
+        _canvas.Children.Add(_rotationHandle);
+    }
+    
+    private void RotationHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_targetElement == null || _targetAnnotation == null) return;
+        
+        _isRotating = true;
+        _originalRotation = _targetAnnotation.Rotation;
+        
+        // Calculate center of the element
+        double left = Canvas.GetLeft(_targetElement);
+        double top = Canvas.GetTop(_targetElement);
+        double width = _targetElement.ActualWidth > 0 ? _targetElement.ActualWidth : _targetElement.Width;
+        double height = _targetElement.ActualHeight > 0 ? _targetElement.ActualHeight : _targetElement.Height;
+        
+        if (double.IsNaN(width) || double.IsNaN(height))
+        {
+            if (_targetAnnotation is ImageAnnotationItem imgAnn)
+            {
+                width = imgAnn.Width * _viewModel.ZoomScale;
+                height = imgAnn.Height * _viewModel.ZoomScale;
+            }
+            else if (_targetAnnotation is ShapeAnnotationItem shapeAnn)
+            {
+                width = shapeAnn.Width * _viewModel.ZoomScale;
+                height = shapeAnn.Height * _viewModel.ZoomScale;
+            }
+            else if (_targetAnnotation is TextAnnotationItem textAnn)
+            {
+                width = textAnn.Width * _viewModel.ZoomScale;
+                height = textAnn.Height * _viewModel.ZoomScale;
+            }
+        }
+        
+        _rotationCenter = new WpfPoint(left + width / 2, top + height / 2);
+        
+        if (sender is Ellipse handle)
+        {
+            handle.CaptureMouse();
+        }
+        e.Handled = true;
+    }
+    
+    private void RotationHandle_MouseMove(object sender, WpfMouseEventArgs e)
+    {
+        if (!_isRotating || _targetElement == null || _targetAnnotation == null) return;
+        
+        var currentPoint = e.GetPosition(_canvas);
+        
+        // Calculate angle from center to current mouse position
+        double deltaX = currentPoint.X - _rotationCenter.X;
+        double deltaY = currentPoint.Y - _rotationCenter.Y;
+        double angle = Math.Atan2(deltaY, deltaX) * 180 / Math.PI;
+        
+        // Adjust angle (0 degrees = up, clockwise positive)
+        angle = angle + 90;
+        
+        // Snap to 15-degree increments if Shift is held
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            angle = Math.Round(angle / 15) * 15;
+        }
+        
+        // Normalize to 0-360
+        while (angle < 0) angle += 360;
+        while (angle >= 360) angle -= 360;
+        
+        // Apply rotation transform to the element
+        _targetElement.RenderTransformOrigin = new WpfPoint(0.5, 0.5);
+        _targetElement.RenderTransform = new RotateTransform(angle);
+        
+        // Update rotation handles position based on rotated element
+        UpdateRotationHandlePosition(angle);
+        
+        _viewModel.StatusMessage = $"Rotation: {angle:F0}° (Hold Shift for 15° snap)";
+        e.Handled = true;
+    }
+    
+    private void RotationHandle_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isRotating || _targetElement == null || _targetAnnotation == null) return;
+        
+        if (sender is Ellipse handle)
+        {
+            handle.ReleaseMouseCapture();
+        }
+        
+        // Get final rotation angle from the transform
+        double finalRotation = 0;
+        if (_targetElement.RenderTransform is RotateTransform rotateTransform)
+        {
+            finalRotation = rotateTransform.Angle;
+        }
+        
+        // Normalize to 0-360
+        while (finalRotation < 0) finalRotation += 360;
+        while (finalRotation >= 360) finalRotation -= 360;
+        
+        // Record rotation action for undo if rotation changed
+        if (Math.Abs(finalRotation - _originalRotation) > 0.1)
+        {
+            var rotateAction = new RotateAnnotationAction(
+                _targetAnnotation,
+                _originalRotation,
+                finalRotation);
+            _viewModel.RecordUndoableAction(rotateAction);
+        }
+        
+        // Update annotation model
+        _targetAnnotation.Rotation = finalRotation;
+        
+        _isRotating = false;
+        _viewModel.StatusMessage = $"Rotated to {finalRotation:F0}°";
+        
+        // Refresh to ensure proper rendering
+        _refreshCallback?.Invoke();
+        
+        e.Handled = true;
+    }
+    
+    /// <summary>
+    /// Update rotation handle and line position during rotation
+    /// </summary>
+    private void UpdateRotationHandlePosition(double angle)
+    {
+        if (_rotationHandle == null || _rotationLine == null || _targetElement == null) return;
+        
+        double left = Canvas.GetLeft(_targetElement);
+        double top = Canvas.GetTop(_targetElement);
+        double width = _targetElement.ActualWidth > 0 ? _targetElement.ActualWidth : _targetElement.Width;
+        double height = _targetElement.ActualHeight > 0 ? _targetElement.ActualHeight : _targetElement.Height;
+        
+        if (double.IsNaN(width) || double.IsNaN(height))
+        {
+            if (_targetAnnotation is ImageAnnotationItem imgAnn)
+            {
+                width = imgAnn.Width * _viewModel.ZoomScale;
+                height = imgAnn.Height * _viewModel.ZoomScale;
+            }
+            else if (_targetAnnotation is ShapeAnnotationItem shapeAnn)
+            {
+                width = shapeAnn.Width * _viewModel.ZoomScale;
+                height = shapeAnn.Height * _viewModel.ZoomScale;
+            }
+        }
+        
+        double centerX = left + width / 2;
+        double centerY = top + height / 2;
+        
+        // Calculate rotated position of top-center point
+        double angleRad = angle * Math.PI / 180;
+        double topCenterOffsetX = 0;
+        double topCenterOffsetY = -height / 2;
+        
+        double rotatedTopX = centerX + topCenterOffsetX * Math.Cos(angleRad) - topCenterOffsetY * Math.Sin(angleRad);
+        double rotatedTopY = centerY + topCenterOffsetX * Math.Sin(angleRad) + topCenterOffsetY * Math.Cos(angleRad);
+        
+        // Calculate handle position (above the rotated top-center)
+        double handleOffsetX = 0;
+        double handleOffsetY = -(height / 2 + RotationHandleDistance);
+        
+        double rotatedHandleX = centerX + handleOffsetX * Math.Cos(angleRad) - handleOffsetY * Math.Sin(angleRad);
+        double rotatedHandleY = centerY + handleOffsetX * Math.Sin(angleRad) + handleOffsetY * Math.Cos(angleRad);
+        
+        // Update line
+        _rotationLine.X1 = rotatedTopX;
+        _rotationLine.Y1 = rotatedTopY;
+        _rotationLine.X2 = rotatedHandleX;
+        _rotationLine.Y2 = rotatedHandleY;
+        
+        // Update handle position
+        Canvas.SetLeft(_rotationHandle, rotatedHandleX - RotationHandleSize / 2);
+        Canvas.SetTop(_rotationHandle, rotatedHandleY - RotationHandleSize / 2);
     }
     
     private void Handle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -838,6 +1107,21 @@ public class ResizeHandlesManager
                         break;
                 }
             }
+        }
+        
+        // Update rotation handle position (without rotation transformation)
+        if (_rotationHandle != null && _rotationLine != null)
+        {
+            double centerX = left + width / 2;
+            double handleY = top - RotationHandleDistance;
+            
+            _rotationLine.X1 = centerX;
+            _rotationLine.Y1 = top;
+            _rotationLine.X2 = centerX;
+            _rotationLine.Y2 = handleY + RotationHandleSize / 2;
+            
+            Canvas.SetLeft(_rotationHandle, centerX - RotationHandleSize / 2);
+            Canvas.SetTop(_rotationHandle, handleY);
         }
     }
 }

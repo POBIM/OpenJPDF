@@ -186,6 +186,35 @@ public class ResizeAnnotationAction : IUndoableAction
 }
 
 /// <summary>
+/// Action for rotating an annotation
+/// </summary>
+public class RotateAnnotationAction : IUndoableAction
+{
+    private readonly AnnotationItem _annotation;
+    private readonly double _oldRotation;
+    private readonly double _newRotation;
+    
+    public string Description => $"Rotate {_annotation.DisplayName}";
+    
+    public RotateAnnotationAction(AnnotationItem annotation, double oldRotation, double newRotation)
+    {
+        _annotation = annotation;
+        _oldRotation = oldRotation;
+        _newRotation = newRotation;
+    }
+    
+    public void Execute()
+    {
+        _annotation.Rotation = _newRotation;
+    }
+    
+    public void Undo()
+    {
+        _annotation.Rotation = _oldRotation;
+    }
+}
+
+/// <summary>
 /// Action for modifying annotation properties
 /// </summary>
 public class ModifyAnnotationAction : IUndoableAction

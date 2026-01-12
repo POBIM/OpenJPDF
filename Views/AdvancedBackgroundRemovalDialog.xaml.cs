@@ -276,12 +276,15 @@ public partial class AdvancedBackgroundRemovalDialog : Window
             if (result.Success && result.ImageBytes != null)
             {
                 // Load the AI result and extract mask
-                using var ms = new MemoryStream(result.ImageBytes);
+                // PERFORMANCE FIX: Don't use 'using' with stream assigned to StreamSource
+                // Also freeze the bitmap for thread safety
+                var ms = new MemoryStream(result.ImageBytes);
                 var aiResult = new BitmapImage();
                 aiResult.BeginInit();
                 aiResult.CacheOption = BitmapCacheOption.OnLoad;
                 aiResult.StreamSource = ms;
                 aiResult.EndInit();
+                aiResult.Freeze(); // PERFORMANCE FIX: Must freeze for thread safety
                 
                 // Convert AI result alpha to our mask
                 ApplyAiMaskFromResult(aiResult);
@@ -432,7 +435,8 @@ public partial class AdvancedBackgroundRemovalDialog : Window
             var resultBytes = ApplyMaskToImage();
             if (resultBytes != null)
             {
-                using var ms = new MemoryStream(resultBytes);
+                // PERFORMANCE FIX: Don't use 'using' with stream assigned to StreamSource
+                var ms = new MemoryStream(resultBytes);
                 var preview = new BitmapImage();
                 preview.BeginInit();
                 preview.CacheOption = BitmapCacheOption.OnLoad;
@@ -503,7 +507,9 @@ public partial class AdvancedBackgroundRemovalDialog : Window
         }
         
         // Create result bitmap
+        // PERFORMANCE FIX: Freeze bitmap for thread safety
         var resultBitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, sourcePixels, stride);
+        resultBitmap.Freeze();
         
         // Encode to PNG
         var encoder = new PngBitmapEncoder();

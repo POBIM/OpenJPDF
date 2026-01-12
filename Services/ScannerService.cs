@@ -368,7 +368,8 @@ public class ScannerService : IDisposable
                 
                 System.Diagnostics.Debug.WriteLine($"Got binary data: {imageData.Length} bytes");
 
-                using var stream = new MemoryStream(imageData);
+                // PERFORMANCE FIX: Don't use 'using' with stream assigned to StreamSource
+                var stream = new MemoryStream(imageData);
                 var bitmap = new BitmapImage();
                 bitmap.BeginInit();
                 bitmap.CacheOption = BitmapCacheOption.OnLoad;

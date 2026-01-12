@@ -81,6 +81,19 @@ public partial class HeaderFooterElement : ObservableObject
 }
 
 /// <summary>
+/// Page scope for custom elements (TextBox, ImageBox)
+/// </summary>
+public enum PageScope
+{
+    AllPages,
+    FirstPageOnly,
+    LastPageOnly,
+    OddPagesOnly,
+    EvenPagesOnly,
+    CustomRange
+}
+
+/// <summary>
 /// Custom text box that can be positioned anywhere on the page
 /// Useful for signature boxes, custom labels, etc.
 /// </summary>
@@ -138,6 +151,51 @@ public partial class CustomTextBox : ObservableObject
     private float boxHeight = 20f;
 
     /// <summary>
+    /// Rotation angle in degrees (0-360)
+    /// </summary>
+    [ObservableProperty]
+    private double rotation = 0;
+
+    #region Page Scope
+
+    /// <summary>
+    /// Which pages this text box appears on
+    /// </summary>
+    [ObservableProperty]
+    private PageScope pageScope = PageScope.AllPages;
+
+    /// <summary>
+    /// Start page for CustomRange scope (1-based)
+    /// </summary>
+    [ObservableProperty]
+    private int startPage = 1;
+
+    /// <summary>
+    /// End page for CustomRange scope (1-based)
+    /// </summary>
+    [ObservableProperty]
+    private int endPage = 1;
+
+    #endregion
+
+    /// <summary>
+    /// Check if this text box should appear on a specific page
+    /// </summary>
+    public bool ShouldApplyToPage(int pageNumber, int totalPages)
+    {
+        return PageScope switch
+        {
+            PageScope.AllPages => true,
+            PageScope.FirstPageOnly => pageNumber == 1,
+            PageScope.LastPageOnly => pageNumber == totalPages,
+            PageScope.OddPagesOnly => pageNumber % 2 == 1,
+            PageScope.EvenPagesOnly => pageNumber % 2 == 0,
+            PageScope.CustomRange => pageNumber >= StartPage && pageNumber <= Math.Min(EndPage, totalPages),
+            _ => true
+        };
+    }
+
+    /// <summary>
     /// Get formatted text with placeholder replacement
     /// </summary>
     public string GetFormattedText(int currentPage, int totalPages, string fileName, DateTime date)
@@ -150,6 +208,97 @@ public partial class CustomTextBox : ObservableObject
             .Replace("{total}", totalPages.ToString())
             .Replace("{date}", date.ToString("yyyy-MM-dd"))
             .Replace("{filename}", System.IO.Path.GetFileName(fileName));
+    }
+}
+
+/// <summary>
+/// Custom image box that can be positioned anywhere on the page
+/// Useful for logos, watermarks, signatures, stamps, etc.
+/// </summary>
+public partial class CustomImageBox : ObservableObject
+{
+    [ObservableProperty]
+    private string label = "Image Box";
+
+    /// <summary>
+    /// Path to the image file
+    /// </summary>
+    [ObservableProperty]
+    private string imagePath = "";
+
+    /// <summary>
+    /// X offset from left edge of page (in points, 72 points = 1 inch)
+    /// </summary>
+    [ObservableProperty]
+    private float offsetX = 50f;
+
+    /// <summary>
+    /// Y offset from bottom of page (in points, 72 points = 1 inch)
+    /// </summary>
+    [ObservableProperty]
+    private float offsetY = 100f;
+
+    /// <summary>
+    /// Width of the image (in points)
+    /// </summary>
+    [ObservableProperty]
+    private float width = 100f;
+
+    /// <summary>
+    /// Height of the image (in points)
+    /// </summary>
+    [ObservableProperty]
+    private float height = 50f;
+
+    /// <summary>
+    /// Rotation angle in degrees (0-360)
+    /// </summary>
+    [ObservableProperty]
+    private double rotation = 0;
+
+    /// <summary>
+    /// Opacity (0.0 to 1.0) - useful for watermarks
+    /// </summary>
+    [ObservableProperty]
+    private float opacity = 1.0f;
+
+    #region Page Scope
+
+    /// <summary>
+    /// Which pages this image box appears on
+    /// </summary>
+    [ObservableProperty]
+    private PageScope pageScope = PageScope.AllPages;
+
+    /// <summary>
+    /// Start page for CustomRange scope (1-based)
+    /// </summary>
+    [ObservableProperty]
+    private int startPage = 1;
+
+    /// <summary>
+    /// End page for CustomRange scope (1-based)
+    /// </summary>
+    [ObservableProperty]
+    private int endPage = 1;
+
+    #endregion
+
+    /// <summary>
+    /// Check if this image box should appear on a specific page
+    /// </summary>
+    public bool ShouldApplyToPage(int pageNumber, int totalPages)
+    {
+        return PageScope switch
+        {
+            PageScope.AllPages => true,
+            PageScope.FirstPageOnly => pageNumber == 1,
+            PageScope.LastPageOnly => pageNumber == totalPages,
+            PageScope.OddPagesOnly => pageNumber % 2 == 1,
+            PageScope.EvenPagesOnly => pageNumber % 2 == 0,
+            PageScope.CustomRange => pageNumber >= StartPage && pageNumber <= Math.Min(EndPage, totalPages),
+            _ => true
+        };
     }
 }
 
@@ -228,6 +377,16 @@ public partial class HeaderFooterConfig : ObservableObject
     /// </summary>
     [ObservableProperty]
     private ObservableCollection<CustomTextBox> customTextBoxes = new();
+
+    #endregion
+
+    #region Custom Image Boxes
+
+    /// <summary>
+    /// Custom image boxes with free positioning (for logos, watermarks, stamps, etc.)
+    /// </summary>
+    [ObservableProperty]
+    private ObservableCollection<CustomImageBox> customImageBoxes = new();
 
     #endregion
 

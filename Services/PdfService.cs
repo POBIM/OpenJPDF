@@ -77,6 +77,10 @@ public class PdfService : IPdfService, IDisposable
         return fonts;
     });
 
+    // PERFORMANCE FIX: Cache for PdfFont objects to avoid repeated font loading
+    // Key: (fontFamily, isBold, isItalic, needsThai) -> PdfFont
+    private static readonly Dictionary<(string, bool, bool, bool), PdfFont> _fontCache = new();
+
     public int PageCount => _pageCount;
 
     public async Task<bool> LoadPdfAsync(string filePath)
@@ -302,8 +306,9 @@ public class PdfService : IPdfService, IDisposable
         using var image = SKImage.FromBitmap(skBitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         
+        // PERFORMANCE FIX: Don't use 'using' with stream assigned to StreamSource
         var bitmap = new BitmapImage();
-        using var stream = data.AsStream();
+        var stream = data.AsStream();
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.StreamSource = stream;
@@ -751,6 +756,27 @@ public class PdfService : IPdfService, IDisposable
                             float textX = boxX + padding;
                             float textY = boxY + padding + (pdfFontSize * 0.25f);
 
+                            // For rotated text, apply rotation to background and border too
+                            bool hasRotation = Math.Abs(textAnn.Rotation) > 0.1;
+                            
+                            if (hasRotation)
+                            {
+                                // Calculate center of the text box for rotation
+                                float centerX = boxX + boxWidth / 2;
+                                float centerY = boxY + boxHeight / 2;
+                                
+                                // Convert rotation angle to radians (negative because PDF Y-axis is inverted)
+                                double angleRad = -textAnn.Rotation * Math.PI / 180;
+                                float cos = (float)Math.Cos(angleRad);
+                                float sin = (float)Math.Sin(angleRad);
+                                
+                                canvas.SaveState();
+                                // Translate to center, rotate, translate back
+                                canvas.ConcatMatrix(1, 0, 0, 1, centerX, centerY);
+                                canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
+                                canvas.ConcatMatrix(1, 0, 0, 1, -centerX, -centerY);
+                            }
+                            
                             // Draw background if not transparent
                             if (!string.IsNullOrEmpty(textAnn.BackgroundColor) && textAnn.BackgroundColor != "Transparent")
                             {
@@ -774,8 +800,9 @@ public class PdfService : IPdfService, IDisposable
                                     .RestoreState();
                             }
 
-                            // Draw text
+                            // Draw text (rotation already applied above if needed)
                             var textColorParsed = ParseColor(textAnn.Color);
+                            
                             canvas.BeginText()
                                 .SetFontAndSize(font, pdfFontSize)
                                 .SetFillColor(textColorParsed)
@@ -793,6 +820,12 @@ public class PdfService : IPdfService, IDisposable
                                     .LineTo(textX + pdfTextWidth, textY - 1)
                                     .Stroke()
                                     .RestoreState();
+                            }
+                            
+                            // Restore state if rotation was applied
+                            if (hasRotation)
+                            {
+                                canvas.RestoreState();
                             }
                         }
                     }
@@ -823,14 +856,48 @@ public class PdfService : IPdfService, IDisposable
 
                             var imageData = ImageDataFactory.Create(imgAnn.ImagePath);
                             var canvas = new PdfCanvas(page);
-                            canvas.AddImageFittedIntoRectangle(
-                                imageData,
-                                new ITextRectangle(
-                                    pdfX,
-                                    mediaBoxTop - pdfY - pdfHeight,
-                                    pdfWidth,
-                                    pdfHeight),
-                                false);
+                            
+                            // Apply rotation if specified
+                            if (Math.Abs(imgAnn.Rotation) > 0.1)
+                            {
+                                // Calculate center of the image in PDF coordinates
+                                float centerX = pdfX + pdfWidth / 2;
+                                float centerY = mediaBoxTop - pdfY - pdfHeight / 2;
+                                
+                                // Convert rotation angle to radians (negative because PDF Y-axis is inverted)
+                                double angleRad = -imgAnn.Rotation * Math.PI / 180;
+                                float cos = (float)Math.Cos(angleRad);
+                                float sin = (float)Math.Sin(angleRad);
+                                
+                                // Apply rotation transform around center
+                                canvas.SaveState();
+                                // Translate to center, rotate, translate back
+                                canvas.ConcatMatrix(1, 0, 0, 1, centerX, centerY);
+                                canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
+                                canvas.ConcatMatrix(1, 0, 0, 1, -centerX, -centerY);
+                                
+                                canvas.AddImageFittedIntoRectangle(
+                                    imageData,
+                                    new ITextRectangle(
+                                        pdfX,
+                                        mediaBoxTop - pdfY - pdfHeight,
+                                        pdfWidth,
+                                        pdfHeight),
+                                    false);
+                                    
+                                canvas.RestoreState();
+                            }
+                            else
+                            {
+                                canvas.AddImageFittedIntoRectangle(
+                                    imageData,
+                                    new ITextRectangle(
+                                        pdfX,
+                                        mediaBoxTop - pdfY - pdfHeight,
+                                        pdfWidth,
+                                        pdfHeight),
+                                    false);
+                            }
                         }
                     }
 
@@ -1170,11 +1237,23 @@ public class PdfService : IPdfService, IDisposable
     /// Get a font that supports the text content with proper embedding
     /// Automatically uses Thai-compatible font when Thai characters are detected
     /// Priority: 1) Bundled fonts 2) System fonts 3) Fallback
+    /// PERFORMANCE FIX: Uses cache to avoid repeated font loading
     /// </summary>
     private static PdfFont GetThaiCompatibleFont(string fontFamily, bool isBold, bool isItalic, string? textContent = null)
     {
         string systemFontsFolder = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
         bool needsThai = textContent != null && ContainsThai(textContent);
+        
+        // PERFORMANCE FIX: Check cache first
+        var cacheKey = (fontFamily.ToLower(), isBold, isItalic, needsThai);
+        lock (_fontCache)
+        {
+            if (_fontCache.TryGetValue(cacheKey, out var cachedFont))
+            {
+                System.Diagnostics.Debug.WriteLine($"[FONT CACHE] Hit: '{fontFamily}' (bold={isBold}, italic={isItalic}, thai={needsThai})");
+                return cachedFont;
+            }
+        }
         
         try
         {
@@ -1189,6 +1268,7 @@ public class PdfService : IPdfService, IDisposable
                     var font = PdfFontFactory.CreateFont(bundledPath, PdfEncodings.IDENTITY_H,
                         PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                     System.Diagnostics.Debug.WriteLine($"[FONT] Using bundled font: {bundledPath} for '{fontFamily}' (bold={isBold}, italic={isItalic})");
+                    CacheFont(cacheKey, font);
                     return font;
                 }
                 catch (Exception ex)
@@ -1208,6 +1288,7 @@ public class PdfService : IPdfService, IDisposable
                         var font = PdfFontFactory.CreateFont(defaultThaiPath, PdfEncodings.IDENTITY_H,
                             PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                         System.Diagnostics.Debug.WriteLine($"[FONT] Using bundled Thai font: {defaultThaiPath} for '{fontFamily}' (bold={isBold}, italic={isItalic})");
+                        CacheFont(cacheKey, font);
                         return font;
                     }
                     catch (Exception ex)
@@ -1245,6 +1326,7 @@ public class PdfService : IPdfService, IDisposable
                         var font = PdfFontFactory.CreateFont(thaiPath, PdfEncodings.IDENTITY_H,
                             PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                         System.Diagnostics.Debug.WriteLine($"[FONT] Using system Thai font: {thaiPath} for '{fontFamily}' (bold={isBold}, italic={isItalic})");
+                        CacheFont(cacheKey, font);
                         return font;
                     }
                     catch (Exception ex)
@@ -1270,6 +1352,7 @@ public class PdfService : IPdfService, IDisposable
                             var font = PdfFontFactory.CreateFont(fontPath, PdfEncodings.IDENTITY_H,
                                 PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                             System.Diagnostics.Debug.WriteLine($"[FONT] Using system Thai fallback: {fontPath}");
+                            CacheFont(cacheKey, font);
                             return font;
                         }
                         catch { }
@@ -1290,6 +1373,7 @@ public class PdfService : IPdfService, IDisposable
                         var font = PdfFontFactory.CreateFont(requestedPath, PdfEncodings.IDENTITY_H,
                             PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                         System.Diagnostics.Debug.WriteLine($"[FONT] Using system font: {requestedPath} (bold={isBold}, italic={isItalic})");
+                        CacheFont(cacheKey, font);
                         return font;
                     }
                     catch (Exception ex)
@@ -1310,6 +1394,7 @@ public class PdfService : IPdfService, IDisposable
                     var font = PdfFontFactory.CreateFont(notoPath, PdfEncodings.IDENTITY_H,
                         PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                     System.Diagnostics.Debug.WriteLine($"[FONT] Using bundled Noto Sans Thai fallback: {notoPath}");
+                    CacheFont(cacheKey, font);
                     return font;
                 }
                 catch { }
@@ -1323,6 +1408,7 @@ public class PdfService : IPdfService, IDisposable
                 var font = PdfFontFactory.CreateFont(tahomaPath, PdfEncodings.IDENTITY_H,
                     PdfFontFactory.EmbeddingStrategy.FORCE_EMBEDDED);
                 System.Diagnostics.Debug.WriteLine($"[FONT] Using Tahoma fallback: {tahomaPath} (requested '{fontFamily}' not found)");
+                CacheFont(cacheKey, font);
                 return font;
             }
         }
@@ -1333,7 +1419,21 @@ public class PdfService : IPdfService, IDisposable
 
         // Last resort - Helvetica (no Thai support)
         System.Diagnostics.Debug.WriteLine($"[FONT] WARNING: Using Helvetica - Thai will not display correctly! Requested: '{fontFamily}'");
-        return PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+        var helvetica = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+        CacheFont(cacheKey, helvetica);
+        return helvetica;
+    }
+
+    /// <summary>
+    /// PERFORMANCE FIX: Helper method to cache a font
+    /// </summary>
+    private static void CacheFont((string, bool, bool, bool) key, PdfFont font)
+    {
+        lock (_fontCache)
+        {
+            _fontCache[key] = font;
+            System.Diagnostics.Debug.WriteLine($"[FONT CACHE] Added: key=({key.Item1}, bold={key.Item2}, italic={key.Item3}, thai={key.Item4}), cache size={_fontCache.Count}");
+        }
     }
 
     /// <summary>
@@ -1674,10 +1774,22 @@ public class PdfService : IPdfService, IDisposable
                                 rightMargin, footerY, HorizontalPosition.Right, pdfDoc);
                         }
                         
-                        // Apply custom text boxes
+                        // Apply custom text boxes (with page scope check)
                         foreach (var customBox in config.CustomTextBoxes)
                         {
-                            DrawCustomTextBox(canvas, customBox, pageNum, totalPages, fileNameToUse, now, pdfDoc);
+                            if (customBox.ShouldApplyToPage(pageNum, totalPages))
+                            {
+                                DrawCustomTextBox(canvas, customBox, pageNum, totalPages, fileNameToUse, now, pdfDoc);
+                            }
+                        }
+                        
+                        // Apply custom image boxes (with page scope check)
+                        foreach (var imageBox in config.CustomImageBoxes)
+                        {
+                            if (imageBox.ShouldApplyToPage(pageNum, totalPages))
+                            {
+                                DrawCustomImageBox(canvas, imageBox, pdfDoc, pageNum);
+                            }
                         }
                     }
                 }
@@ -1805,14 +1917,14 @@ public class PdfService : IPdfService, IDisposable
     }
 
     /// <summary>
-    /// Draw a custom text box at specified position (supports multiline)
+    /// Draw a custom text box at specified position (supports multiline and rotation)
     /// </summary>
     private void DrawCustomTextBox(PdfCanvas canvas, CustomTextBox textBox, int currentPage, int totalPages,
         string fileName, DateTime date, iText.Kernel.Pdf.PdfDocument pdfDoc)
     {
         string text = textBox.GetFormattedText(currentPage, totalPages, fileName, date);
         
-        System.Diagnostics.Debug.WriteLine($"DrawCustomTextBox: Label={textBox.Label}, Text='{text}', Offset=({textBox.OffsetX}, {textBox.OffsetY})");
+        System.Diagnostics.Debug.WriteLine($"DrawCustomTextBox: Label={textBox.Label}, Text='{text}', Offset=({textBox.OffsetX}, {textBox.OffsetY}), Rotation={textBox.Rotation}");
         
         // Get current page for size reference
         var page = pdfDoc.GetPage(currentPage);
@@ -1829,6 +1941,27 @@ public class PdfService : IPdfService, IDisposable
             if (fontSize < 6f) fontSize = 10f;
             
             var textColor = ParseColor(textBox.Color);
+            
+            // Apply rotation if needed
+            bool hasRotation = Math.Abs(textBox.Rotation) > 0.001f;
+            if (hasRotation)
+            {
+                canvas.SaveState();
+                // Calculate center of the text box for rotation pivot
+                float centerX = x + textBox.BoxWidth / 2f;
+                float centerY = y + textBox.BoxHeight / 2f;
+                
+                // Convert degrees to radians (negative because PDF rotation is counter-clockwise)
+                double radians = -textBox.Rotation * Math.PI / 180.0;
+                float cos = (float)Math.Cos(radians);
+                float sin = (float)Math.Sin(radians);
+                
+                // Apply rotation transform around center point
+                // Matrix: [cos, sin, -sin, cos, cx - cx*cos + cy*sin, cy - cx*sin - cy*cos]
+                float tx = centerX - centerX * cos + centerY * sin;
+                float ty = centerY - centerX * sin - centerY * cos;
+                canvas.ConcatMatrix(cos, sin, -sin, cos, tx, ty);
+            }
             
             // Draw border if enabled
             if (textBox.ShowBorder)
@@ -1878,11 +2011,81 @@ public class PdfService : IPdfService, IDisposable
                 canvas.EndText();
             }
             
-            System.Diagnostics.Debug.WriteLine($"Drew custom text box at ({x}, {y}) with size {textBox.BoxWidth}x{textBox.BoxHeight}");
+            // Restore state if rotation was applied
+            if (hasRotation)
+            {
+                canvas.RestoreState();
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"Drew custom text box at ({x}, {y}) with size {textBox.BoxWidth}x{textBox.BoxHeight}, rotation={textBox.Rotation}");
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Error drawing custom text box: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Draw a custom image box at specified position (supports rotation and opacity)
+    /// </summary>
+    private void DrawCustomImageBox(PdfCanvas canvas, CustomImageBox imageBox, iText.Kernel.Pdf.PdfDocument pdfDoc, int currentPage)
+    {
+        System.Diagnostics.Debug.WriteLine($"DrawCustomImageBox: Label={imageBox.Label}, Path='{imageBox.ImagePath}', Offset=({imageBox.OffsetX}, {imageBox.OffsetY}), Rotation={imageBox.Rotation}, Opacity={imageBox.Opacity}");
+        
+        if (string.IsNullOrEmpty(imageBox.ImagePath) || !IoFile.Exists(imageBox.ImagePath))
+        {
+            System.Diagnostics.Debug.WriteLine($"Image file not found or empty: {imageBox.ImagePath}");
+            return;
+        }
+        
+        try
+        {
+            var imageData = ImageDataFactory.Create(imageBox.ImagePath);
+            
+            float x = imageBox.OffsetX;
+            float y = imageBox.OffsetY;
+            float width = imageBox.Width;
+            float height = imageBox.Height;
+            
+            canvas.SaveState();
+            
+            // Apply opacity if not fully opaque
+            if (imageBox.Opacity < 1.0f)
+            {
+                var gState = new iText.Kernel.Pdf.Extgstate.PdfExtGState();
+                gState.SetFillOpacity(imageBox.Opacity);
+                canvas.SetExtGState(gState);
+            }
+            
+            // Apply rotation if needed
+            bool hasRotation = Math.Abs(imageBox.Rotation) > 0.001f;
+            if (hasRotation)
+            {
+                // Calculate center of the image box for rotation pivot
+                float centerX = x + width / 2f;
+                float centerY = y + height / 2f;
+                
+                // Convert degrees to radians (negative because PDF rotation is counter-clockwise)
+                double radians = -imageBox.Rotation * Math.PI / 180.0;
+                float cos = (float)Math.Cos(radians);
+                float sin = (float)Math.Sin(radians);
+                
+                // Apply rotation transform around center point
+                float tx = centerX - centerX * cos + centerY * sin;
+                float ty = centerY - centerX * sin - centerY * cos;
+                canvas.ConcatMatrix(cos, sin, -sin, cos, tx, ty);
+            }
+            
+            // Draw the image
+            canvas.AddImageFittedIntoRectangle(imageData, new ITextRectangle(x, y, width, height), false);
+            
+            canvas.RestoreState();
+            
+            System.Diagnostics.Debug.WriteLine($"Drew custom image box at ({x}, {y}) with size {width}x{height}, rotation={imageBox.Rotation}, opacity={imageBox.Opacity}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error drawing custom image box: {ex.Message}");
         }
     }
 

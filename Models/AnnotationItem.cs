@@ -25,6 +25,12 @@ public abstract partial class AnnotationItem : ObservableObject
     [ObservableProperty]
     private bool isSelected;
 
+    /// <summary>
+    /// Rotation angle in degrees (0-360)
+    /// </summary>
+    [ObservableProperty]
+    private double rotation;
+
     public abstract string DisplayName { get; }
     public abstract string IconEmoji { get; }
 }
@@ -94,7 +100,8 @@ public partial class TextAnnotationItem : AnnotationItem
         IsUnderline = IsUnderline,
         TextAlignment = TextAlignment,
         Width = Width,
-        Height = Height
+        Height = Height,
+        Rotation = Rotation
     };
 
     public static TextAnnotationItem FromAnnotation(TextAnnotation ann) => new()
@@ -114,7 +121,8 @@ public partial class TextAnnotationItem : AnnotationItem
         IsUnderline = ann.IsUnderline,
         TextAlignment = ann.TextAlignment,
         Width = ann.Width,
-        Height = ann.Height
+        Height = ann.Height,
+        Rotation = ann.Rotation
     };
 }
 
@@ -142,7 +150,8 @@ public partial class ImageAnnotationItem : AnnotationItem
         Y = Y,
         Width = Width,
         Height = Height,
-        ImagePath = ImagePath
+        ImagePath = ImagePath,
+        Rotation = Rotation
     };
 
     public static ImageAnnotationItem FromAnnotation(ImageAnnotation ann) => new()
@@ -152,7 +161,8 @@ public partial class ImageAnnotationItem : AnnotationItem
         Y = ann.Y,
         Width = ann.Width,
         Height = ann.Height,
-        ImagePath = ann.ImagePath
+        ImagePath = ann.ImagePath,
+        Rotation = ann.Rotation
     };
 }
 

@@ -21,11 +21,17 @@ public partial class HeaderFooterDialog : Window
     /// Collection of custom text boxes for editing
     /// </summary>
     private readonly ObservableCollection<CustomTextBox> _customTextBoxes = new();
+    
+    /// <summary>
+    /// Collection of custom image boxes for editing
+    /// </summary>
+    private readonly ObservableCollection<CustomImageBox> _customImageBoxes = new();
 
     public HeaderFooterDialog()
     {
         InitializeComponent();
         CustomTextBoxesList.ItemsSource = _customTextBoxes;
+        CustomImageBoxesList.ItemsSource = _customImageBoxes;
     }
 
     public HeaderFooterDialog(int totalPages) : this()
@@ -99,7 +105,31 @@ public partial class HeaderFooterDialog : Window
                 IsItalic = textBox.IsItalic,
                 ShowBorder = textBox.ShowBorder,
                 BoxWidth = textBox.BoxWidth,
-                BoxHeight = textBox.BoxHeight
+                BoxHeight = textBox.BoxHeight,
+                Rotation = textBox.Rotation,
+                PageScope = textBox.PageScope,
+                StartPage = textBox.StartPage,
+                EndPage = textBox.EndPage
+            });
+        }
+        
+        // Custom image boxes
+        _customImageBoxes.Clear();
+        foreach (var imageBox in config.CustomImageBoxes)
+        {
+            _customImageBoxes.Add(new CustomImageBox
+            {
+                Label = imageBox.Label,
+                ImagePath = imageBox.ImagePath,
+                OffsetX = imageBox.OffsetX,
+                OffsetY = imageBox.OffsetY,
+                Width = imageBox.Width,
+                Height = imageBox.Height,
+                Rotation = imageBox.Rotation,
+                Opacity = imageBox.Opacity,
+                PageScope = imageBox.PageScope,
+                StartPage = imageBox.StartPage,
+                EndPage = imageBox.EndPage
             });
         }
     }
@@ -203,7 +233,30 @@ public partial class HeaderFooterDialog : Window
                 IsItalic = textBox.IsItalic,
                 ShowBorder = textBox.ShowBorder,
                 BoxWidth = textBox.BoxWidth,
-                BoxHeight = textBox.BoxHeight
+                BoxHeight = textBox.BoxHeight,
+                Rotation = textBox.Rotation,
+                PageScope = textBox.PageScope,
+                StartPage = textBox.StartPage,
+                EndPage = textBox.EndPage
+            });
+        }
+        
+        // Custom image boxes
+        foreach (var imageBox in _customImageBoxes)
+        {
+            config.CustomImageBoxes.Add(new CustomImageBox
+            {
+                Label = imageBox.Label,
+                ImagePath = imageBox.ImagePath,
+                OffsetX = imageBox.OffsetX,
+                OffsetY = imageBox.OffsetY,
+                Width = imageBox.Width,
+                Height = imageBox.Height,
+                Rotation = imageBox.Rotation,
+                Opacity = imageBox.Opacity,
+                PageScope = imageBox.PageScope,
+                StartPage = imageBox.StartPage,
+                EndPage = imageBox.EndPage
             });
         }
 
@@ -348,5 +401,129 @@ public partial class HeaderFooterDialog : Window
         }
     }
 
+    #endregion
+    
+    #region Custom Image Box Handlers
+
+    private void AddImageBox_Click(object sender, RoutedEventArgs e)
+    {
+        int count = _customImageBoxes.Count + 1;
+        _customImageBoxes.Add(new CustomImageBox
+        {
+            Label = $"Image Box {count}",
+            ImagePath = "",
+            OffsetX = 50f + (count - 1) * 20f,  // Stagger position
+            OffsetY = 100f + (count - 1) * 30f,
+            Width = 100f,
+            Height = 100f,
+            Rotation = 0f,
+            Opacity = 1.0f,
+            PageScope = PageScope.AllPages,
+            StartPage = 1,
+            EndPage = TotalPages
+        });
+    }
+
+    private void RemoveImageBox_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button button && button.Tag is CustomImageBox imageBox)
+        {
+            _customImageBoxes.Remove(imageBox);
+        }
+    }
+
+    private void SelectCustomImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button button && button.Tag is CustomImageBox imageBox)
+        {
+            var path = SelectImage();
+            if (path != null)
+            {
+                imageBox.ImagePath = path;
+                // Force UI refresh by re-adding to collection
+                int index = _customImageBoxes.IndexOf(imageBox);
+                if (index >= 0)
+                {
+                    _customImageBoxes.RemoveAt(index);
+                    _customImageBoxes.Insert(index, imageBox);
+                }
+            }
+        }
+    }
+
+    #endregion
+    
+    #region Conversion Handlers
+    
+    /// <summary>
+    /// Convert a CustomTextBox to CustomImageBox (preserves position)
+    /// </summary>
+    private void ConvertToImageBox_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button button && button.Tag is CustomTextBox textBox)
+        {
+            // Create new ImageBox with same position
+            var imageBox = new CustomImageBox
+            {
+                Label = $"Image (from {textBox.Label})",
+                ImagePath = "", // Will need to select image
+                OffsetX = textBox.OffsetX,
+                OffsetY = textBox.OffsetY,
+                Width = textBox.BoxWidth > 0 ? textBox.BoxWidth : 100f,
+                Height = textBox.BoxHeight > 0 ? textBox.BoxHeight : 100f,
+                Rotation = textBox.Rotation,
+                Opacity = 1.0f,
+                PageScope = textBox.PageScope,
+                StartPage = textBox.StartPage,
+                EndPage = textBox.EndPage
+            };
+            
+            // Prompt user to select image
+            var path = SelectImage();
+            if (path != null)
+            {
+                imageBox.ImagePath = path;
+                
+                // Remove the text box and add the image box
+                _customTextBoxes.Remove(textBox);
+                _customImageBoxes.Add(imageBox);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Convert a CustomImageBox to CustomTextBox (preserves position)
+    /// </summary>
+    private void ConvertToTextBox_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button button && button.Tag is CustomImageBox imageBox)
+        {
+            // Create new TextBox with same position
+            var textBox = new CustomTextBox
+            {
+                Label = $"Text (from {imageBox.Label})",
+                Text = "", // Empty text, user will enter
+                OffsetX = imageBox.OffsetX,
+                OffsetY = imageBox.OffsetY,
+                FontFamily = "Arial",
+                FontSize = 12f,
+                Color = "#000000",
+                IsBold = false,
+                IsItalic = false,
+                ShowBorder = true,
+                BoxWidth = imageBox.Width,
+                BoxHeight = imageBox.Height,
+                Rotation = imageBox.Rotation,
+                PageScope = imageBox.PageScope,
+                StartPage = imageBox.StartPage,
+                EndPage = imageBox.EndPage
+            };
+            
+            // Remove the image box and add the text box
+            _customImageBoxes.Remove(imageBox);
+            _customTextBoxes.Add(textBox);
+        }
+    }
+    
     #endregion
 }

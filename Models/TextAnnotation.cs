@@ -35,4 +35,9 @@ public class TextAnnotation
     public bool IsItalic { get; set; } = false;
     public bool IsUnderline { get; set; } = false;
     public TextAlignment TextAlignment { get; set; } = TextAlignment.Left;
+    
+    /// <summary>
+    /// Rotation angle in degrees (0-360)
+    /// </summary>
+    public double Rotation { get; set; }
 }

@@ -87,7 +87,22 @@ public partial class MainViewModel
     
     /// <summary>
     /// Place an image annotation from bytes (for clipboard/screen capture)
+    /// PERFORMANCE FIX: Made async to avoid blocking UI thread
     /// </summary>
+    public async Task PlaceImageAnnotationFromBytesAsync(byte[] imageBytes, double pdfX, double pdfY, double pdfWidth, double pdfHeight)
+    {
+        // Save to temp file - use async to avoid blocking UI
+        string tempPath = Path.Combine(Path.GetTempPath(), $"pasted_image_{Guid.NewGuid()}.png");
+        await Task.Run(() => File.WriteAllBytes(tempPath, imageBytes)).ConfigureAwait(false);
+        
+        PlaceImageAnnotation(tempPath, pdfX, pdfY, pdfWidth, pdfHeight);
+    }
+
+    /// <summary>
+    /// Place an image annotation from bytes (for clipboard/screen capture)
+    /// Legacy sync version - prefer PlaceImageAnnotationFromBytesAsync
+    /// </summary>
+    [Obsolete("Use PlaceImageAnnotationFromBytesAsync for better UI responsiveness")]
     public void PlaceImageAnnotationFromBytes(byte[] imageBytes, double pdfX, double pdfY, double pdfWidth, double pdfHeight)
     {
         // Save to temp file
@@ -605,6 +620,18 @@ public partial class MainViewModel
         return TryCropBitmap(bitmap, cropRect, out croppedBytes);
     }
 
+    /// <summary>
+    /// Save image bytes to temp file asynchronously
+    /// PERFORMANCE FIX: Made async to avoid blocking UI thread
+    /// </summary>
+    private static async Task<string> SaveTempImageBytesAsync(byte[] bytes, string prefix, string extension)
+    {
+        string safeExtension = extension.TrimStart('.');
+        string tempPath = Path.Combine(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid()}.{safeExtension}");
+        await Task.Run(() => File.WriteAllBytes(tempPath, bytes)).ConfigureAwait(false);
+        return tempPath;
+    }
+
     private static string SaveTempImageBytes(byte[] bytes, string prefix, string extension)
     {
         string safeExtension = extension.TrimStart('.');
@@ -911,12 +938,6 @@ public partial class MainViewModel
     /// <param name="annotation">The text annotation to convert</param>
     public void ConvertAnnotationToHeaderFooter(AnnotationItem annotation)
     {
-        if (annotation is not TextAnnotationItem textItem)
-        {
-            StatusMessage = "Only text annotations can be converted to Header/Footer (Image support coming soon)";
-            return;
-        }
-
         // Create HeaderFooterConfig if not exists
         if (HeaderFooterConfig == null)
         {
@@ -927,34 +948,75 @@ public partial class MainViewModel
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         var (pageWidth, pageHeight) = pdfService.GetPageDimensions(CurrentPageIndex);
 
-        // Annotation.Y = distance from page top (in PDF points)
-        // CustomTextBox.OffsetY = distance from page bottom (in PDF points)
-        // Convert: OffsetY = pageHeight - annotation.Y
-        float pdfX = (float)textItem.X;
-        float pdfY = (float)(pageHeight - textItem.Y);
-
-        // Create CustomTextBox from annotation (auto-fit, no explicit width/height)
-        var customTextBox = new CustomTextBox
+        if (annotation is TextAnnotationItem textItem)
         {
-            Label = string.IsNullOrWhiteSpace(textItem.Text) 
-                ? "Text Box" 
-                : (textItem.Text.Length > 20 ? textItem.Text.Substring(0, 20) + "..." : textItem.Text),
-            Text = textItem.Text,
-            OffsetX = pdfX,
-            OffsetY = pdfY,
-            FontFamily = textItem.FontFamily,
-            FontSize = textItem.FontSize,
-            Color = textItem.Color,
-            IsBold = textItem.IsBold,
-            IsItalic = textItem.IsItalic,
-            ShowBorder = false // No border for auto-fit
-        };
+            // Annotation.Y = distance from page top (in PDF points)
+            // CustomTextBox.OffsetY = distance from page bottom (in PDF points)
+            // Convert: OffsetY = pageHeight - annotation.Y
+            float pdfX = (float)textItem.X;
+            float pdfY = (float)(pageHeight - textItem.Y);
 
-        // Add to Header/Footer config
-        HeaderFooterConfig.CustomTextBoxes.Add(customTextBox);
+            // Create CustomTextBox from annotation (auto-fit, no explicit width/height)
+            var customTextBox = new CustomTextBox
+            {
+                Label = string.IsNullOrWhiteSpace(textItem.Text) 
+                    ? "Text Box" 
+                    : (textItem.Text.Length > 20 ? textItem.Text.Substring(0, 20) + "..." : textItem.Text),
+                Text = textItem.Text,
+                OffsetX = pdfX,
+                OffsetY = pdfY,
+                FontFamily = textItem.FontFamily,
+                FontSize = textItem.FontSize,
+                Color = textItem.Color,
+                IsBold = textItem.IsBold,
+                IsItalic = textItem.IsItalic,
+                ShowBorder = false // No border for auto-fit
+            };
 
-        // Remove the annotation (it's now managed by Header/Footer)
-        Annotations.Remove(annotation);
+            // Add to Header/Footer config
+            HeaderFooterConfig.CustomTextBoxes.Add(customTextBox);
+
+            // Remove the annotation (it's now managed by Header/Footer)
+            Annotations.Remove(annotation);
+
+            StatusMessage = $"Text added to Header/Footer. Click 'Edit H/F' to adjust position. Save to apply.";
+        }
+        else if (annotation is ImageAnnotationItem imageItem)
+        {
+            // Annotation.Y = distance from page top (in annotation coords)
+            // CustomImageBox.OffsetY = distance from page bottom (in PDF points)
+            // Convert: OffsetY = pageHeight - annotation.Y - annotation.Height
+            float pdfX = (float)imageItem.X;
+            float pdfY = (float)(pageHeight - imageItem.Y - imageItem.Height);
+
+            // Create CustomImageBox from annotation
+            var customImageBox = new CustomImageBox
+            {
+                Label = string.IsNullOrWhiteSpace(imageItem.ImagePath) 
+                    ? "Image Box" 
+                    : Path.GetFileName(imageItem.ImagePath),
+                ImagePath = imageItem.ImagePath,
+                OffsetX = pdfX,
+                OffsetY = pdfY,
+                Width = (float)imageItem.Width,
+                Height = (float)imageItem.Height,
+                Rotation = imageItem.Rotation,
+                Opacity = 1.0f
+            };
+
+            // Add to Header/Footer config
+            HeaderFooterConfig.CustomImageBoxes.Add(customImageBox);
+
+            // Remove the annotation (it's now managed by Header/Footer)
+            Annotations.Remove(annotation);
+
+            StatusMessage = $"Image added to Header/Footer. Click 'Edit H/F' to adjust position. Save to apply.";
+        }
+        else
+        {
+            StatusMessage = "Only text and image annotations can be converted to Header/Footer.";
+            return;
+        }
 
         // Refresh displays
         ClearAnnotationsRequested?.Invoke();
@@ -963,8 +1025,6 @@ public partial class MainViewModel
 
         // Notify property changed for HasHeaderFooter
         OnPropertyChanged(nameof(HasHeaderFooter));
-
-        StatusMessage = $"Text added to Header/Footer. Click 'Edit H/F' to adjust position. Save to apply.";
     }
 
     #endregion

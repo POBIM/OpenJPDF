@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6.x - https://jrsoftware.org/isinfo.php
 
 #define MyAppName "OpenJPDF"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Sittichat Pothising"
 #define MyAppURL "https://github.com/POBIM/OpenJPDF"
 #define MyAppExeName "OpenJPDF.exe"

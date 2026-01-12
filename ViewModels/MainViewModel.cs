@@ -32,7 +32,20 @@ public enum EditMode
     SelectText,     // OCR selection mode
     SelectContent,  // Select extracted content from original PDF
     ScreenCapture,  // Capture screen area as image annotation
-    EditHeaderFooter // Edit Header/Footer mode - drag CustomTextBox positions
+    EditHeaderFooter, // Edit Header/Footer mode - drag CustomTextBox positions
+    Calibrate,      // Calibrate measurement scale by drawing reference line
+    MeasureDistance, // Measure distance between two points
+    MeasureArea,    // Measure area by drawing polygon
+    SelectMeasurement // Select and edit existing measurements
+}
+
+/// <summary>
+/// Information about a side length for display in sidebar
+/// </summary>
+public class SideLengthInfo
+{
+    public string Name { get; set; } = "";
+    public string Length { get; set; } = "";
 }
 
 /// <summary>
@@ -169,6 +182,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     #region Observable Properties - Edit Mode
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMeasuring))]
+    [NotifyPropertyChangedFor(nameof(ShowMeasurementPanel))]
     private EditMode currentEditMode = EditMode.None;
 
     [ObservableProperty]
@@ -243,12 +258,145 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Whether header/footer is configured
     /// </summary>
     public bool HasHeaderFooter => HeaderFooterConfig != null && 
-        (HeaderFooterConfig.HeaderEnabled || HeaderFooterConfig.FooterEnabled || HeaderFooterConfig.CustomTextBoxes.Count > 0);
+        (HeaderFooterConfig.HeaderEnabled || HeaderFooterConfig.FooterEnabled || 
+         HeaderFooterConfig.CustomTextBoxes.Count > 0 || HeaderFooterConfig.CustomImageBoxes.Count > 0);
 
     /// <summary>
     /// Whether we're in Edit Header/Footer mode (CustomTextBox shown as temporary annotations)
     /// </summary>
     public bool IsEditingHeaderFooter => CurrentEditMode == EditMode.EditHeaderFooter;
+
+    #endregion
+
+    #region Observable Properties - Measurement Tool
+
+    [ObservableProperty]
+    private MeasurementCalibration measurementCalibration = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowMeasurementPanel))]
+    private ObservableCollection<MeasurementAnnotation> measurements = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMeasurementSelected))]
+    [NotifyPropertyChangedFor(nameof(IsLineMeasurementSelected))]
+    [NotifyPropertyChangedFor(nameof(IsAreaMeasurementSelected))]
+    [NotifyPropertyChangedFor(nameof(SelectedMeasurementDistance))]
+    [NotifyPropertyChangedFor(nameof(SelectedMeasurementArea))]
+    [NotifyPropertyChangedFor(nameof(SelectedMeasurementPerimeter))]
+    [NotifyPropertyChangedFor(nameof(SelectedAreaSideLengths))]
+    private MeasurementAnnotation? selectedMeasurement;
+
+    /// <summary>
+    /// Selected line measurement (for sidebar property panel)
+    /// </summary>
+    [ObservableProperty]
+    private LineMeasurement? selectedLineMeasurement;
+
+    /// <summary>
+    /// Selected area measurement (for sidebar property panel)
+    /// </summary>
+    [ObservableProperty]
+    private AreaMeasurement? selectedAreaMeasurement;
+
+    /// <summary>
+    /// Whether any measurement is selected
+    /// </summary>
+    public bool IsMeasurementSelected => SelectedMeasurement != null;
+
+    /// <summary>
+    /// Whether a line measurement is selected
+    /// </summary>
+    public bool IsLineMeasurementSelected => SelectedMeasurement is LineMeasurement;
+
+    /// <summary>
+    /// Whether an area measurement is selected
+    /// </summary>
+    public bool IsAreaMeasurementSelected => SelectedMeasurement is AreaMeasurement;
+
+    /// <summary>
+    /// Get formatted distance of selected measurement
+    /// </summary>
+    public string SelectedMeasurementDistance => SelectedMeasurement != null 
+        ? MeasurementCalibration.FormatDistance(SelectedMeasurement.GetPixelLength())
+        : "";
+
+    /// <summary>
+    /// Get formatted area of selected measurement (for area measurements)
+    /// </summary>
+    public string SelectedMeasurementArea => SelectedMeasurement is AreaMeasurement area
+        ? MeasurementCalibration.FormatArea(area.GetPixelArea())
+        : "";
+
+    /// <summary>
+    /// Get formatted perimeter of selected area measurement
+    /// </summary>
+    public string SelectedMeasurementPerimeter => SelectedMeasurement is AreaMeasurement area
+        ? MeasurementCalibration.FormatDistance(area.GetPixelLength())
+        : "";
+
+    /// <summary>
+    /// Get list of side lengths for selected area measurement (for sidebar display)
+    /// </summary>
+    public List<SideLengthInfo> SelectedAreaSideLengths
+    {
+        get
+        {
+            if (SelectedMeasurement is not AreaMeasurement area || area.Points.Count < 3)
+                return new List<SideLengthInfo>();
+
+            var sideLengths = new List<SideLengthInfo>();
+            for (int i = 0; i < area.Points.Count; i++)
+            {
+                var p1 = area.Points[i];
+                var p2 = area.Points[(i + 1) % area.Points.Count];
+                double length = p1.DistanceTo(p2);
+                sideLengths.Add(new SideLengthInfo
+                {
+                    Name = $"Side {i + 1}:",
+                    Length = MeasurementCalibration.FormatDistance(length)
+                });
+            }
+            return sideLengths;
+        }
+    }
+
+    /// <summary>
+    /// Whether measurement tool is calibrated and ready to use
+    /// </summary>
+    public bool IsCalibrated => MeasurementCalibration.IsCalibrated;
+
+    /// <summary>
+    /// Whether we're in any measurement mode
+    /// </summary>
+    public bool IsMeasuring => CurrentEditMode == EditMode.Calibrate || 
+                                CurrentEditMode == EditMode.MeasureDistance || 
+                                CurrentEditMode == EditMode.MeasureArea ||
+                                CurrentEditMode == EditMode.SelectMeasurement;
+
+    /// <summary>
+    /// Whether to show the measurement sidebar (when in measurement mode OR has measurements)
+    /// </summary>
+    public bool ShowMeasurementPanel => IsMeasuring || Measurements.Count > 0 || IsCalibrated;
+
+    /// <summary>
+    /// Event fired when measurements need to be refreshed on canvas
+    /// </summary>
+    public event Action? RefreshMeasurementsRequested;
+
+    /// <summary>
+    /// Event fired when calibration dialog should be shown
+    /// </summary>
+    public event Action<double>? ShowCalibrationDialogRequested;
+
+    /// <summary>
+    /// Handle selected measurement changed - update typed properties
+    /// </summary>
+    partial void OnSelectedMeasurementChanged(MeasurementAnnotation? value)
+    {
+        SelectedLineMeasurement = value as LineMeasurement;
+        SelectedAreaMeasurement = value as AreaMeasurement;
+    }
 
     #endregion
 
@@ -486,7 +634,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool IsItalic,
         bool ShowBorder,
         float BoxWidth,
-        float BoxHeight
+        float BoxHeight,
+        double Rotation
+    );
+    
+    /// <summary>
+    /// Preview data for custom image box
+    /// </summary>
+    public record CustomImageBoxPreview(
+        string Label,
+        string? ImagePath,
+        float OffsetX,
+        float OffsetY,
+        float Width,
+        float Height,
+        double Rotation,
+        float Opacity
     );
 
     /// <summary>
@@ -501,7 +664,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         HeaderFooterPreviewElement FooterRight,
         float HeaderMargin,
         float FooterMargin,
-        List<CustomTextBoxPreview> CustomTextBoxes
+        List<CustomTextBoxPreview> CustomTextBoxes,
+        List<CustomImageBoxPreview> CustomImageBoxes
     );
 
     /// <summary>
@@ -538,21 +702,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
             );
         }
 
-        // Create custom text box previews
-        var customTextBoxPreviews = config.CustomTextBoxes.Select(tb => new CustomTextBoxPreview(
-            Text: tb.GetFormattedText(currentPage, TotalPages, fileName, now),
-            Label: tb.Label,
-            OffsetX: tb.OffsetX,
-            OffsetY: tb.OffsetY,
-            FontSize: tb.FontSize,
-            FontFamily: tb.FontFamily,
-            Color: tb.Color,
-            IsBold: tb.IsBold,
-            IsItalic: tb.IsItalic,
-            ShowBorder: tb.ShowBorder,
-            BoxWidth: tb.BoxWidth,
-            BoxHeight: tb.BoxHeight
-        )).ToList();
+        // Create custom text box previews (filter by page scope)
+        var customTextBoxPreviews = config.CustomTextBoxes
+            .Where(tb => tb.ShouldApplyToPage(currentPage, TotalPages))
+            .Select(tb => new CustomTextBoxPreview(
+                Text: tb.GetFormattedText(currentPage, TotalPages, fileName, now),
+                Label: tb.Label,
+                OffsetX: tb.OffsetX,
+                OffsetY: tb.OffsetY,
+                FontSize: tb.FontSize,
+                FontFamily: tb.FontFamily,
+                Color: tb.Color,
+                IsBold: tb.IsBold,
+                IsItalic: tb.IsItalic,
+                ShowBorder: tb.ShowBorder,
+                BoxWidth: tb.BoxWidth,
+                BoxHeight: tb.BoxHeight,
+                Rotation: tb.Rotation
+            )).ToList();
+        
+        // Create custom image box previews (filter by page scope)
+        var customImageBoxPreviews = config.CustomImageBoxes
+            .Where(ib => ib.ShouldApplyToPage(currentPage, TotalPages))
+            .Select(ib => new CustomImageBoxPreview(
+                Label: ib.Label,
+                ImagePath: ib.ImagePath,
+                OffsetX: ib.OffsetX,
+                OffsetY: ib.OffsetY,
+                Width: ib.Width,
+                Height: ib.Height,
+                Rotation: ib.Rotation,
+                Opacity: ib.Opacity
+            )).ToList();
 
         return new HeaderFooterPreviewData(
             HeaderLeft: CreateElement(config.HeaderLeft, config.HeaderEnabled),
@@ -563,7 +744,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             FooterRight: CreateElement(config.FooterRight, config.FooterEnabled),
             HeaderMargin: config.HeaderMargin,
             FooterMargin: config.FooterMargin,
-            CustomTextBoxes: customTextBoxPreviews
+            CustomTextBoxes: customTextBoxPreviews,
+            CustomImageBoxes: customImageBoxPreviews
         );
     }
 
@@ -589,6 +771,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(HasHeaderFooter));
                 RefreshHeaderFooterPreview?.Invoke();
                 
+                // Refresh all thumbnails to show H/F elements
+                _ = RefreshAllThumbnailsWithHeaderFooterAsync();
+                
                 StatusMessage = HasHeaderFooter 
                     ? "Header/Footer configured. Preview shown on canvas."
                     : "Header/Footer cleared.";
@@ -609,6 +794,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (CurrentEditMode == EditMode.EditHeaderFooter)
         {
             _tempHeaderFooterAnnotations.Clear();
+            _tempHeaderFooterImageAnnotations.Clear();
             CurrentEditMode = EditMode.None;
         }
         
@@ -617,11 +803,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsEditingHeaderFooter));
         RefreshHeaderFooterPreview?.Invoke();
         RefreshAnnotationsRequested?.Invoke();
+        
+        // Refresh all thumbnails to remove H/F elements
+        _ = RefreshAllThumbnailsWithHeaderFooterAsync();
+        
         StatusMessage = "Header/Footer cleared.";
     }
 
     // Track temporary annotations created during Edit H/F mode
     private readonly List<TextAnnotationItem> _tempHeaderFooterAnnotations = new();
+    private readonly List<ImageAnnotationItem> _tempHeaderFooterImageAnnotations = new();
 
     [RelayCommand]
     private void ToggleEditHeaderFooter()
@@ -653,7 +844,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Enter Edit Header/Footer mode - convert CustomTextBox to temporary TextAnnotations
+    /// Enter Edit Header/Footer mode - convert CustomTextBox and CustomImageBox to temporary annotations
     /// </summary>
     private void EnterEditHeaderFooterMode()
     {
@@ -704,6 +895,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _tempHeaderFooterAnnotations.Add(annotation);
             Annotations.Add(annotation);
         }
+        
+        // Convert each CustomImageBox to a temporary ImageAnnotation
+        foreach (var imageBox in HeaderFooterConfig.CustomImageBoxes)
+        {
+            // Convert PDF coordinates to annotation coordinates
+            // ImageBox.OffsetY is from bottom, annotation Y is from top
+            double annotationX = imageBox.OffsetX * scaleFactor;
+            double annotationY = (pageHeightPts - imageBox.OffsetY - imageBox.Height) * scaleFactor;
+            double annotationWidth = imageBox.Width * scaleFactor;
+            double annotationHeight = imageBox.Height * scaleFactor;
+
+            var annotation = new ImageAnnotationItem
+            {
+                PageNumber = CurrentPageIndex,
+                X = annotationX,
+                Y = annotationY,
+                Width = annotationWidth,
+                Height = annotationHeight,
+                ImagePath = imageBox.ImagePath,
+                Rotation = imageBox.Rotation,
+                // Note: Opacity will be handled in the view layer
+            };
+
+            _tempHeaderFooterImageAnnotations.Add(annotation);
+            Annotations.Add(annotation);
+        }
 
         CurrentEditMode = EditMode.EditHeaderFooter;
         
@@ -711,11 +928,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RefreshHeaderFooterPreview?.Invoke();
         RefreshAnnotationsRequested?.Invoke();
         
-        StatusMessage = "Edit Header/Footer: Drag to move, double-click to edit text. Click 'Edit H/F' again to save.";
+        StatusMessage = "Edit Header/Footer: Drag to move text/images. Click 'Edit H/F' again to save.";
     }
 
     /// <summary>
-    /// Exit Edit Header/Footer mode - save annotation positions back to CustomTextBox
+    /// Exit Edit Header/Footer mode - save annotation positions back to CustomTextBox and CustomImageBox
     /// </summary>
     private void ExitEditHeaderFooterMode()
     {
@@ -750,13 +967,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
             textBox.IsBold = annotation.IsBold;
             textBox.IsItalic = annotation.IsItalic;
         }
+        
+        // Update CustomImageBox from annotations
+        for (int i = 0; i < _tempHeaderFooterImageAnnotations.Count && i < HeaderFooterConfig.CustomImageBoxes.Count; i++)
+        {
+            var annotation = _tempHeaderFooterImageAnnotations[i];
+            var imageBox = HeaderFooterConfig.CustomImageBoxes[i];
 
-        // Remove temporary annotations
+            // Convert annotation coordinates back to PDF coordinates
+            // annotation.Y is from top, ImageBox.OffsetY is from bottom
+            float pdfX = (float)(annotation.X / scaleFactor);
+            float pdfWidth = (float)(annotation.Width / scaleFactor);
+            float pdfHeight = (float)(annotation.Height / scaleFactor);
+            float pdfY = (float)(pageHeightPts - (annotation.Y / scaleFactor) - pdfHeight);
+
+            // Update position, size, rotation and image path (for Remove Background)
+            imageBox.OffsetX = pdfX;
+            imageBox.OffsetY = pdfY;
+            imageBox.Width = pdfWidth;
+            imageBox.Height = pdfHeight;
+            imageBox.Rotation = annotation.Rotation;
+            imageBox.ImagePath = annotation.ImagePath; // Update ImagePath (changed by Remove Background)
+        }
+
+        // Remove temporary text annotations
         foreach (var annotation in _tempHeaderFooterAnnotations)
         {
             Annotations.Remove(annotation);
         }
         _tempHeaderFooterAnnotations.Clear();
+        
+        // Remove temporary image annotations
+        foreach (var annotation in _tempHeaderFooterImageAnnotations)
+        {
+            Annotations.Remove(annotation);
+        }
+        _tempHeaderFooterImageAnnotations.Clear();
 
         CurrentEditMode = EditMode.None;
         
@@ -764,6 +1010,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ClearAnnotationsRequested?.Invoke();
         RefreshAnnotationsRequested?.Invoke();
         RefreshHeaderFooterPreview?.Invoke();
+        
+        // Refresh all thumbnails to show updated H/F elements
+        _ = RefreshAllThumbnailsWithHeaderFooterAsync();
         
         StatusMessage = "Header/Footer updated. Save to apply changes.";
     }

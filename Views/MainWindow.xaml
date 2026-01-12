@@ -263,6 +263,39 @@
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="8,4"/>
 
+                <!-- Measurement Tools -->
+                <Button Style="{StaticResource ToolbarButton}" Command="{Binding EnterCalibrateModeCommand}" ToolTip="Calibrate: Click start, click end to set reference line">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📏" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Calibrate"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ToolbarButton}" Command="{Binding EnterMeasureDistanceModeCommand}" 
+                        IsEnabled="{Binding IsCalibrated}"
+                        ToolTip="Distance: Click start, click end (Shift = axis-lock)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📐" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Distance"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ToolbarButton}" Command="{Binding EnterMeasureAreaModeCommand}"
+                        IsEnabled="{Binding IsCalibrated}"
+                        ToolTip="Area: Click points, double-click to close (Shift = axis-lock)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⬡" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Area"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ToolbarButton}" Command="{Binding EnterSelectMeasurementModeCommand}"
+                        ToolTip="Select: Click to select, drag nodes to edit">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="✎" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Select"/>
+                    </StackPanel>
+                </Button>
+
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="8,4"/>
+
                 <!-- PDF Tools -->
                 <Button Style="{StaticResource ToolbarButton}" Command="{Binding MergePdfCommand}" ToolTip="Merge PDFs">
                     <StackPanel Orientation="Horizontal">
@@ -511,6 +544,14 @@
                                                 Visibility="{Binding IsSelected, Converter={StaticResource BoolToVisibility}}">
                                             <TextBlock Text="✓" Foreground="White" FontSize="10" FontWeight="Bold"/>
                                         </Border>
+                                        <!-- Header/Footer indicator -->
+                                        <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                Background="#4CAF50" CornerRadius="0,0,0,4"
+                                                Padding="4,2" Margin="0,-4,-4,0"
+                                                Visibility="{Binding DataContext.HasHeaderFooter, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}"
+                                                ToolTip="Header/Footer elements applied to this page">
+                                            <TextBlock Text="H/F" Foreground="White" FontSize="9" FontWeight="Bold"/>
+                                        </Border>
                                         <StackPanel>
                                             <Image Source="{Binding Thumbnail}" 
                                                    MaxWidth="160" MaxHeight="160"
@@ -687,6 +728,7 @@
                             <Grid x:Name="PdfContainer" 
                                   Visibility="{Binding IsFileLoaded, Converter={StaticResource BoolToVisibility}}"
                                   MouseLeftButtonDown="PdfContainer_MouseLeftButtonDown"
+                                  MouseRightButtonDown="PdfContainer_MouseRightButtonDown"
                                   Cursor="{Binding EditCursor}"
                                   Background="Transparent"
                                   HorizontalAlignment="Center"
@@ -744,6 +786,7 @@
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- Elements List -->
@@ -786,9 +829,267 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                         </DockPanel>
+                        
+                        <!-- Header/Footer Elements Section -->
+                        <Border Grid.Row="0" DockPanel.Dock="Bottom" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0"
+                                Visibility="{Binding HasHeaderFooter, Converter={StaticResource BoolToVisibility}}"
+                                Margin="0,8,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Header/Footer Elements" FontWeight="Medium"
+                                           Padding="12,8,12,4" Foreground="#4CAF50" FontSize="11"/>
+                                
+                                <!-- Custom Text Boxes -->
+                                <ItemsControl ItemsSource="{Binding HeaderFooterConfig.CustomTextBoxes}" Margin="8,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="8,6" Margin="0,2" CornerRadius="4" Background="#E8F5E9">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="📝" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Label}" FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="Text Box (All Pages)" FontSize="10" Foreground="#666666"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                
+                                <!-- Custom Image Boxes -->
+                                <ItemsControl ItemsSource="{Binding HeaderFooterConfig.CustomImageBoxes}" Margin="8,0,8,8">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="8,6" Margin="0,2" CornerRadius="4" Background="#E3F2FD">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="🖼️" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Label}" FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="Image Box (All Pages)" FontSize="10" Foreground="#666666"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Measurements Section -->
+                        <Border Grid.Row="1" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0"
+                                Visibility="{Binding ShowMeasurementPanel, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <TextBlock Text="Measurement Tool" FontWeight="Medium"
+                                           Padding="12,8,12,4" Foreground="#F44336" FontSize="11"/>
+                                
+                                <!-- Calibration Status -->
+                                <Border Margin="8,4" Padding="8" CornerRadius="4">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="#FFEBEE"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsCalibrated}" Value="True">
+                                                    <Setter Property="Background" Value="#E8F5E9"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock FontWeight="SemiBold" FontSize="11">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="⚠ Not Calibrated"/>
+                                                    <Setter Property="Foreground" Value="#D32F2F"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsCalibrated}" Value="True">
+                                                            <Setter Property="Text" Value="✓ Calibrated"/>
+                                                            <Setter Property="Foreground" Value="#388E3C"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding MeasurementCalibration.ScaleFactor, StringFormat='Scale: {0:F4} units/px'}"
+                                                   FontSize="10" Foreground="#666666"
+                                                   Visibility="{Binding IsCalibrated, Converter={StaticResource BoolToVisibility}}"/>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <!-- Calibration Button -->
+                                <Button Content="📏 Calibrate" Margin="8,4" Padding="8,6"
+                                        Command="{Binding EnterCalibrateModeCommand}"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTip="Draw a reference line to set measurement scale"/>
+                                
+                                <!-- Measurement Mode Buttons -->
+                                <Grid Margin="8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="📐 Distance" Margin="0,0,2,0" Padding="6,6"
+                                            Command="{Binding EnterMeasureDistanceModeCommand}"
+                                            IsEnabled="{Binding IsCalibrated}"/>
+                                    <Button Grid.Column="1" Content="⬡ Area" Margin="2,0,0,0" Padding="6,6"
+                                            Command="{Binding EnterMeasureAreaModeCommand}"
+                                            IsEnabled="{Binding IsCalibrated}"/>
+                                </Grid>
+                                
+                                <!-- Select/Edit Button -->
+                                <Button Content="✎ Select/Edit" Margin="8,4" Padding="8,6"
+                                        Command="{Binding EnterSelectMeasurementModeCommand}"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTip="Select measurements to move nodes or delete"/>
+                                
+                                <!-- Measurements List -->
+                                <TextBlock Text="Measurements" FontSize="11" Margin="8,8,8,4" Foreground="#666666"/>
+                                <ListBox ItemsSource="{Binding Measurements}"
+                                         SelectedItem="{Binding SelectedMeasurement}"
+                                         MaxHeight="150"
+                                         Background="Transparent"
+                                         BorderThickness="0"
+                                         Margin="8,0">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="6,4" Margin="0,2" CornerRadius="4" Background="#FFEBEE">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding IconEmoji}" 
+                                                               FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding DisplayName}" 
+                                                               VerticalAlignment="Center" FontSize="11"/>
+                                                    <Button Grid.Column="2" Content="✕" 
+                                                            Style="{StaticResource ToolbarButton}"
+                                                            Padding="4,2" FontSize="10"
+                                                            Command="{Binding DataContext.DeleteSelectedMeasurementCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                            ToolTip="Delete measurement"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                
+                                <!-- Clear All Button -->
+                                <Button Content="🗑 Clear All" Margin="8,4,8,8" Padding="6,4"
+                                        Command="{Binding ClearMeasurementsCommand}"
+                                        HorizontalAlignment="Stretch" FontSize="11"
+                                        ToolTip="Remove all measurements"/>
+                                
+                                <!-- Selected Measurement Properties -->
+                                <Border BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" Margin="0,8,0,0" Padding="8"
+                                        Visibility="{Binding IsMeasurementSelected, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="📊 Selected Measurement" FontWeight="SemiBold" FontSize="11" 
+                                                   Foreground="#F44336" Margin="0,0,0,8"/>
+                                        
+                                        <!-- Line Measurement Properties -->
+                                        <StackPanel Visibility="{Binding IsLineMeasurementSelected, Converter={StaticResource BoolToVisibility}}">
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="📏 Distance:" FontSize="11" VerticalAlignment="Center"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding SelectedMeasurementDistance}" 
+                                                           FontWeight="Bold" FontSize="12" Foreground="#D32F2F" 
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                            </Grid>
+                                            
+                                            <TextBlock Text="Coordinates" FontSize="10" Foreground="#666666" Margin="0,8,0,4"/>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                                    <TextBlock Text="Start" FontSize="10" Foreground="#888888"/>
+                                                    <TextBlock FontSize="10">
+                                                        <Run Text="X: "/><Run Text="{Binding SelectedLineMeasurement.StartX, StringFormat=F1}"/>
+                                                    </TextBlock>
+                                                    <TextBlock FontSize="10">
+                                                        <Run Text="Y: "/><Run Text="{Binding SelectedLineMeasurement.StartY, StringFormat=F1}"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                                    <TextBlock Text="End" FontSize="10" Foreground="#888888"/>
+                                                    <TextBlock FontSize="10">
+                                                        <Run Text="X: "/><Run Text="{Binding SelectedLineMeasurement.EndX, StringFormat=F1}"/>
+                                                    </TextBlock>
+                                                    <TextBlock FontSize="10">
+                                                        <Run Text="Y: "/><Run Text="{Binding SelectedLineMeasurement.EndY, StringFormat=F1}"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </Grid>
+                                        </StackPanel>
+                                        
+                                        <!-- Area Measurement Properties -->
+                                        <StackPanel Visibility="{Binding IsAreaMeasurementSelected, Converter={StaticResource BoolToVisibility}}">
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="📐 Area:" FontSize="11" VerticalAlignment="Center"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding SelectedMeasurementArea}" 
+                                                           FontWeight="Bold" FontSize="12" Foreground="#D32F2F" 
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                            </Grid>
+                                            <Grid Margin="0,4,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="📏 Perimeter:" FontSize="11" VerticalAlignment="Center"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding SelectedMeasurementPerimeter}" 
+                                                           FontWeight="Bold" FontSize="12" Foreground="#1976D2" 
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                            </Grid>
+                                            
+                                            <!-- Side lengths list -->
+                                            <TextBlock Text="Side Lengths" FontSize="10" Foreground="#666666" Margin="0,8,0,4"/>
+                                            <ItemsControl ItemsSource="{Binding SelectedAreaSideLengths}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="0,1">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="10" Foreground="#888888"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Length}" FontSize="10" 
+                                                                       HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            
+                                            <TextBlock FontSize="10" Margin="0,4,0,0" Foreground="#888888">
+                                                <Run Text="Points: "/><Run Text="{Binding SelectedAreaMeasurement.Points.Count, Mode=OneWay}"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                        
+                                        <!-- Delete Button -->
+                                        <Button Content="🗑 Delete Selected" Margin="0,12,0,0" Padding="8,6"
+                                                Command="{Binding DeleteSelectedMeasurementCommand}"
+                                                HorizontalAlignment="Stretch" FontSize="11"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
 
                         <!-- Properties Panel -->
-                        <Border Grid.Row="1" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" 
+                        <Border Grid.Row="2" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" 
                                 Padding="12" MinHeight="200">
                             <StackPanel>
                                 <TextBlock Text="Properties" FontWeight="Medium" Margin="0,0,0,12"
@@ -1044,7 +1345,7 @@
                         </Border>
 
                         <!-- Action Buttons -->
-                        <Border Grid.Row="2" Padding="12" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+                        <Border Grid.Row="3" Padding="12" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
                             <StackPanel>
                                 <Button Style="{StaticResource PrimaryButton}" 
                                         Content="Apply Changes" 

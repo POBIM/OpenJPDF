@@ -5,6 +5,7 @@
 // See LICENSE file for full license details.
 
 using System.Collections.ObjectModel;
+using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenJPDF.Models;
@@ -21,6 +22,42 @@ namespace OpenJPDF.ViewModels;
 /// </summary>
 public partial class MainViewModel
 {
+    #region Performance Optimization
+    
+    /// <summary>
+    /// PERFORMANCE FIX: Build index lookup dictionary to avoid O(n²) IndexOf calls
+    /// </summary>
+    private Dictionary<PageThumbnail, int> BuildThumbnailIndexMap()
+    {
+        var map = new Dictionary<PageThumbnail, int>(PageThumbnails.Count);
+        for (int i = 0; i < PageThumbnails.Count; i++)
+        {
+            map[PageThumbnails[i]] = i;
+        }
+        return map;
+    }
+    
+    /// <summary>
+    /// PERFORMANCE FIX: Get sorted indices of selected thumbnails using dictionary lookup O(n) instead of O(n²)
+    /// </summary>
+    private List<int> GetSelectedIndicesSorted(bool descending = false)
+    {
+        var indexMap = BuildThumbnailIndexMap();
+        var indices = SelectedThumbnails
+            .Where(t => indexMap.ContainsKey(t))
+            .Select(t => indexMap[t])
+            .ToList();
+        
+        if (descending)
+            indices.Sort((a, b) => b.CompareTo(a));
+        else
+            indices.Sort();
+        
+        return indices;
+    }
+    
+    #endregion
+
     #region Multi-Select Page Properties
 
     /// <summary>
@@ -122,18 +159,16 @@ public partial class MainViewModel
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         int count = SelectedThumbnails.Count;
-        var indicesToRefresh = new List<int>();
+        
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var indicesToRefresh = GetSelectedIndicesSorted(descending: false);
 
-        foreach (var thumbnail in SelectedThumbnails.ToList())
+        foreach (var idx in indicesToRefresh)
         {
-            int idx = PageThumbnails.IndexOf(thumbnail);
-            if (idx < 0) continue;
-
             int currentRotation = GetPageRotation(idx);
             int newRotation = (currentRotation + 90) % 360;
             _pageRotations[idx] = newRotation;
             pdfService.RotatePage(idx, 90);
-            indicesToRefresh.Add(idx);
         }
 
         await RefreshThumbnailsAsync(indicesToRefresh);
@@ -163,18 +198,16 @@ public partial class MainViewModel
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         int count = SelectedThumbnails.Count;
-        var indicesToRefresh = new List<int>();
+        
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var indicesToRefresh = GetSelectedIndicesSorted(descending: false);
 
-        foreach (var thumbnail in SelectedThumbnails.ToList())
+        foreach (var idx in indicesToRefresh)
         {
-            int idx = PageThumbnails.IndexOf(thumbnail);
-            if (idx < 0) continue;
-
             int currentRotation = GetPageRotation(idx);
             int newRotation = (currentRotation + 270) % 360;
             _pageRotations[idx] = newRotation;
             pdfService.RotatePage(idx, -90);
-            indicesToRefresh.Add(idx);
         }
 
         await RefreshThumbnailsAsync(indicesToRefresh);
@@ -206,18 +239,16 @@ public partial class MainViewModel
             return;
         }
 
-        var sortedIndices = SelectedThumbnails
-            .Select(t => PageThumbnails.IndexOf(t))
-            .Where(i => i >= 0)
-            .OrderBy(i => i)
-            .ToList();
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var sortedIndices = GetSelectedIndicesSorted(descending: false);
+        var indicesSet = new HashSet<int>(sortedIndices);
 
         if (sortedIndices.Count == 0 || sortedIndices[0] == 0) return;
 
         foreach (var idx in sortedIndices)
         {
             int targetIdx = idx - 1;
-            if (targetIdx >= 0 && !sortedIndices.Contains(targetIdx))
+            if (targetIdx >= 0 && !indicesSet.Contains(targetIdx))
             {
                 MovePageInternal(idx, targetIdx);
             }
@@ -241,18 +272,16 @@ public partial class MainViewModel
             return;
         }
 
-        var sortedIndices = SelectedThumbnails
-            .Select(t => PageThumbnails.IndexOf(t))
-            .Where(i => i >= 0)
-            .OrderByDescending(i => i)
-            .ToList();
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var sortedIndices = GetSelectedIndicesSorted(descending: true);
+        var indicesSet = new HashSet<int>(sortedIndices);
 
         if (sortedIndices.Count == 0 || sortedIndices[0] == PageThumbnails.Count - 1) return;
 
         foreach (var idx in sortedIndices)
         {
             int targetIdx = idx + 1;
-            if (targetIdx < PageThumbnails.Count && !sortedIndices.Contains(targetIdx))
+            if (targetIdx < PageThumbnails.Count && !indicesSet.Contains(targetIdx))
             {
                 MovePageInternal(idx, targetIdx);
             }
@@ -278,15 +307,18 @@ public partial class MainViewModel
 
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
         
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var indexMap = BuildThumbnailIndexMap();
+        
         // Get selected items in their current order
         var selectedItems = SelectedThumbnails
-            .OrderBy(t => PageThumbnails.IndexOf(t))
+            .Where(t => indexMap.ContainsKey(t))
+            .OrderBy(t => indexMap[t])
             .ToList();
 
         // Get corresponding page images
         var selectedIndices = selectedItems
-            .Select(t => PageThumbnails.IndexOf(t))
-            .Where(i => i >= 0)
+            .Select(t => indexMap[t])
             .ToList();
 
         var selectedPageImages = selectedIndices
@@ -341,15 +373,18 @@ public partial class MainViewModel
 
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
         
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var indexMap = BuildThumbnailIndexMap();
+        
         // Get selected items in their current order
         var selectedItems = SelectedThumbnails
-            .OrderBy(t => PageThumbnails.IndexOf(t))
+            .Where(t => indexMap.ContainsKey(t))
+            .OrderBy(t => indexMap[t])
             .ToList();
 
         // Get corresponding page images
         var selectedIndices = selectedItems
-            .Select(t => PageThumbnails.IndexOf(t))
-            .Where(i => i >= 0)
+            .Select(t => indexMap[t])
             .ToList();
 
         var selectedPageImages = selectedIndices
@@ -423,11 +458,8 @@ public partial class MainViewModel
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
 
-        var sortedIndices = SelectedThumbnails
-            .Select(t => PageThumbnails.IndexOf(t))
-            .Where(i => i >= 0)
-            .OrderByDescending(i => i)
-            .ToList();
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var sortedIndices = GetSelectedIndicesSorted(descending: true);
 
         int deletedCount = 0;
         foreach (var idx in sortedIndices)
@@ -522,15 +554,19 @@ public partial class MainViewModel
 
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
         
+        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
+        var indexMap = BuildThumbnailIndexMap();
+        
         // Get indices of selected items before removal
         var selectedIndices = SelectedThumbnails
-            .Select(t => PageThumbnails.IndexOf(t))
-            .Where(idx => idx >= 0)
+            .Where(t => indexMap.ContainsKey(t))
+            .Select(t => indexMap[t])
             .OrderBy(idx => idx)
             .ToList();
         
         var selectedItems = SelectedThumbnails
-            .OrderBy(t => PageThumbnails.IndexOf(t))
+            .Where(t => indexMap.ContainsKey(t))
+            .OrderBy(t => indexMap[t])
             .ToList();
 
         // Collect PageImages that correspond to selected thumbnails
@@ -832,15 +868,152 @@ public partial class MainViewModel
         {
             // GetPageThumbnail already renders with rotation applied
             var thumbnail = pdfService.GetPageThumbnail(pageIndex, rotation);
+            
             Application.Current.Dispatcher.Invoke(() =>
             {
                 if (pageIndex < PageThumbnails.Count)
                 {
-                    PageThumbnails[pageIndex].UpdateThumbnail(thumbnail);
+                    // Composite H/F elements onto thumbnail if config exists
+                    var compositedThumbnail = CompositeHeaderFooterOnThumbnail(thumbnail, pageIndex);
+                    PageThumbnails[pageIndex].UpdateThumbnail(compositedThumbnail ?? thumbnail);
                     // Don't reset RotationAngle - the bitmap is already rotated
                 }
             });
         });
+    }
+    
+    /// <summary>
+    /// Composite Header/Footer elements onto a thumbnail bitmap
+    /// </summary>
+    private BitmapSource? CompositeHeaderFooterOnThumbnail(BitmapSource? baseThumbnail, int pageIndex)
+    {
+        if (baseThumbnail == null || HeaderFooterConfig == null || !HasHeaderFooter)
+            return baseThumbnail;
+        
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(pageIndex);
+        if (pageWidthPts <= 0 || pageHeightPts <= 0) return baseThumbnail;
+        
+        int currentPage = pageIndex + 1;
+        
+        // Check if H/F should apply to this page
+        if (!HeaderFooterConfig.ShouldApplyToPage(currentPage, TotalPages))
+            return baseThumbnail;
+        
+        try
+        {
+            // Calculate scale factor (thumbnail size vs page size)
+            double scaleX = baseThumbnail.PixelWidth / pageWidthPts;
+            double scaleY = baseThumbnail.PixelHeight / pageHeightPts;
+            double scale = Math.Min(scaleX, scaleY);
+            
+            // Create a DrawingVisual to compose thumbnail + H/F elements
+            var drawingVisual = new System.Windows.Media.DrawingVisual();
+            using (var dc = drawingVisual.RenderOpen())
+            {
+                // Draw base thumbnail
+                dc.DrawImage(baseThumbnail, new System.Windows.Rect(0, 0, baseThumbnail.PixelWidth, baseThumbnail.PixelHeight));
+                
+                // Draw CustomImageBoxes
+                foreach (var imageBox in HeaderFooterConfig.CustomImageBoxes)
+                {
+                    if (!imageBox.ShouldApplyToPage(currentPage, TotalPages))
+                        continue;
+                    
+                    if (string.IsNullOrEmpty(imageBox.ImagePath) || !System.IO.File.Exists(imageBox.ImagePath))
+                        continue;
+                    
+                    try
+                    {
+                        var imgBitmap = new System.Windows.Media.Imaging.BitmapImage();
+                        imgBitmap.BeginInit();
+                        imgBitmap.UriSource = new Uri(imageBox.ImagePath);
+                        imgBitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        imgBitmap.EndInit();
+                        imgBitmap.Freeze();
+                        
+                        // Convert PDF coordinates to thumbnail coordinates
+                        double x = imageBox.OffsetX * scale;
+                        double y = baseThumbnail.PixelHeight - (imageBox.OffsetY + imageBox.Height) * scale;
+                        double width = imageBox.Width * scale;
+                        double height = imageBox.Height * scale;
+                        
+                        // Apply opacity
+                        dc.PushOpacity(imageBox.Opacity);
+                        
+                        // Apply rotation if needed
+                        if (Math.Abs(imageBox.Rotation) > 0.001)
+                        {
+                            var centerX = x + width / 2;
+                            var centerY = y + height / 2;
+                            dc.PushTransform(new System.Windows.Media.RotateTransform(imageBox.Rotation, centerX, centerY));
+                        }
+                        
+                        dc.DrawImage(imgBitmap, new System.Windows.Rect(x, y, width, height));
+                        
+                        // Pop rotation transform
+                        if (Math.Abs(imageBox.Rotation) > 0.001)
+                            dc.Pop();
+                        
+                        // Pop opacity
+                        dc.Pop();
+                    }
+                    catch { }
+                }
+                
+                // Draw CustomTextBoxes (simplified - just draw text)
+                foreach (var textBox in HeaderFooterConfig.CustomTextBoxes)
+                {
+                    if (!textBox.ShouldApplyToPage(currentPage, TotalPages))
+                        continue;
+                    
+                    if (string.IsNullOrEmpty(textBox.Text))
+                        continue;
+                    
+                    try
+                    {
+                        double x = textBox.OffsetX * scale;
+                        double y = baseThumbnail.PixelHeight - textBox.OffsetY * scale;
+                        double fontSize = Math.Max(6, textBox.FontSize * scale);
+                        
+                        var formattedText = new System.Windows.Media.FormattedText(
+                            textBox.Text,
+                            System.Globalization.CultureInfo.CurrentCulture,
+                            System.Windows.FlowDirection.LeftToRight,
+                            new System.Windows.Media.Typeface(textBox.FontFamily),
+                            fontSize,
+                            System.Windows.Media.Brushes.Black,
+                            1.0);
+                        
+                        // Apply rotation if needed
+                        if (Math.Abs(textBox.Rotation) > 0.001)
+                        {
+                            dc.PushTransform(new System.Windows.Media.RotateTransform(textBox.Rotation, x, y));
+                        }
+                        
+                        dc.DrawText(formattedText, new System.Windows.Point(x, y - fontSize));
+                        
+                        if (Math.Abs(textBox.Rotation) > 0.001)
+                            dc.Pop();
+                    }
+                    catch { }
+                }
+            }
+            
+            // Render to bitmap
+            var renderBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                baseThumbnail.PixelWidth, baseThumbnail.PixelHeight,
+                96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+            renderBitmap.Render(drawingVisual);
+            renderBitmap.Freeze();
+            
+            return renderBitmap;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error compositing H/F on thumbnail: {ex.Message}");
+            return baseThumbnail;
+        }
     }
 
     /// <summary>
@@ -850,6 +1023,17 @@ public partial class MainViewModel
     {
         var tasks = pageIndices.Select(RefreshThumbnailAsync).ToList();
         await Task.WhenAll(tasks);
+    }
+    
+    /// <summary>
+    /// Refresh all thumbnails to include Header/Footer elements
+    /// </summary>
+    public async Task RefreshAllThumbnailsWithHeaderFooterAsync()
+    {
+        if (!IsFileLoaded) return;
+        
+        var indices = Enumerable.Range(0, TotalPages).ToList();
+        await RefreshThumbnailsAsync(indices);
     }
 
     #endregion

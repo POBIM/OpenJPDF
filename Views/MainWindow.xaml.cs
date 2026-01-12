@@ -91,6 +91,12 @@ public partial class MainWindow : Window
     private WpfPoint _screenCaptureStart;
     private WpfRectangle? _screenCaptureRect;
 
+    // Measurement tool state
+    private bool _isMeasuring;
+    private WpfPoint _measurementStart;
+    private AreaMeasurement? _currentAreaMeasurement;
+    private System.Windows.Shapes.Polygon? _measurementPolygon;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -141,6 +147,10 @@ public partial class MainWindow : Window
             
             // Subscribe to image selection event
             vm.ImageSelectedForPlacement += OnImageSelectedForPlacement;
+            
+            // Subscribe to measurement events
+            vm.RefreshMeasurementsRequested += RefreshMeasurementsOnCanvas;
+            vm.ShowCalibrationDialogRequested += ShowCalibrationDialog;
         }
 
         // Show about dialog after window is loaded (skip if opened with file)
@@ -307,6 +317,8 @@ public partial class MainWindow : Window
             vm.RefreshExtractedContentRequested -= RefreshExtractedContentOnCanvas;
             vm.PropertyChanged -= ViewModel_PropertyChanged;
             vm.ImageSelectedForPlacement -= OnImageSelectedForPlacement;
+            vm.RefreshMeasurementsRequested -= RefreshMeasurementsOnCanvas;
+            vm.ShowCalibrationDialogRequested -= ShowCalibrationDialog;
         }
         _resizeHandlesManager?.HideHandles();
         CancelImagePreview();
@@ -454,12 +466,108 @@ public partial class MainWindow : Window
                         return;
                     }
 
+                    // Handle measurement modes
+                    if (vm.CurrentEditMode == EditMode.Calibrate || vm.CurrentEditMode == EditMode.MeasureDistance)
+                    {
+                        HandleLineMeasurementClick(position, e);
+                        e.Handled = true;
+                        return;
+                    }
+                    
+                    if (vm.CurrentEditMode == EditMode.MeasureArea)
+                    {
+                        HandleAreaMeasurementClick(position, e);
+                        e.Handled = true;
+                        return;
+                    }
+                    
+                    if (vm.CurrentEditMode == EditMode.SelectMeasurement)
+                    {
+                        HandleMeasurementSelectionClick(position, e);
+                        e.Handled = true;
+                        return;
+                    }
+
                     if (vm.IsEditMode)
                     {
                         vm.HandleCanvasClick(position.X, position.Y, AddAnnotationPreview);
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Handle right-click on PDF container - used for confirming area measurement
+    /// </summary>
+    private void PdfContainer_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            // Handle area measurement - right-click to close polygon
+            if (vm.CurrentEditMode == EditMode.MeasureArea && _currentAreaMeasurement != null)
+            {
+                ConfirmAreaMeasurement();
+                e.Handled = true;
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Confirm and close the current area measurement polygon
+    /// </summary>
+    private void ConfirmAreaMeasurement()
+    {
+        if (DataContext is not MainViewModel vm) return;
+        if (_currentAreaMeasurement == null) return;
+
+        try
+        {
+            if (_currentAreaMeasurement.Points.Count >= 3)
+            {
+                PdfContainer.MouseMove -= AreaMeasurementPreview_MouseMove;
+                
+                if (PdfContainer.IsMouseCaptured)
+                {
+                    PdfContainer.ReleaseMouseCapture();
+                }
+                
+                // Remove preview elements
+                if (_areaPreviewLine != null)
+                {
+                    AnnotationCanvas.Children.Remove(_areaPreviewLine);
+                    _areaPreviewLine = null;
+                }
+                if (_areaClosingPreviewLine != null)
+                {
+                    AnnotationCanvas.Children.Remove(_areaClosingPreviewLine);
+                    _areaClosingPreviewLine = null;
+                }
+                if (_areaDistancePreviewLabel != null)
+                {
+                    AnnotationCanvas.Children.Remove(_areaDistancePreviewLabel);
+                    _areaDistancePreviewLabel = null;
+                }
+                if (_measurementPolygon != null)
+                {
+                    AnnotationCanvas.Children.Remove(_measurementPolygon);
+                    _measurementPolygon = null;
+                }
+
+                var measurementToAdd = _currentAreaMeasurement;
+                _currentAreaMeasurement = null;
+                vm.AddAreaMeasurement(measurementToAdd);
+            }
+            else
+            {
+                vm.StatusMessage = "Area measurement requires at least 3 points. Add more points or press Esc to cancel.";
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error completing area measurement: {ex.Message}");
+            vm.StatusMessage = $"Error completing measurement: {ex.Message}";
         }
     }
 
@@ -610,7 +718,10 @@ public partial class MainWindow : Window
     
     #region Clipboard Paste
     
-    private void PasteImageFromClipboard()
+    /// <summary>
+    /// PERFORMANCE FIX: Made async to avoid blocking UI thread during file I/O
+    /// </summary>
+    private async void PasteImageFromClipboard()
     {
         if (DataContext is not MainViewModel vm) return;
         
@@ -631,11 +742,12 @@ public partial class MainWindow : Window
                 encoder.Frames.Add(BitmapFrame.Create(bitmapSource));
                 encoder.Save(stream);
                 
-                // Save to temp file
+                // Save to temp file - PERFORMANCE FIX: Use async I/O
                 string tempPath = System.IO.Path.Combine(
                     System.IO.Path.GetTempPath(),
                     $"clipboard_image_{Guid.NewGuid()}.png");
-                System.IO.File.WriteAllBytes(tempPath, stream.ToArray());
+                var imageBytes = stream.ToArray();
+                await Task.Run(() => System.IO.File.WriteAllBytes(tempPath, imageBytes));
                 
                 // Show preview that follows mouse
                 vm.CurrentEditMode = EditMode.AddImage;
@@ -825,6 +937,845 @@ public partial class MainWindow : Window
     
     #endregion
 
+    #region Measurement Tool
+
+    // Additional measurement state for click-click mode
+    private bool _measurementFirstClickDone;
+    private WpfLine? _measurementPreviewLine;
+    private WpfEllipse? _startMarkerPreview;
+    private Border? _lineDistancePreviewLabel; // Label showing distance while drawing line
+    private int? _selectedMeasurementNodeIndex;
+    private MeasurementAnnotation? _editingMeasurement;
+    private WpfLine? _areaPreviewLine; // Preview line for area measurement (from last point to cursor)
+    private WpfLine? _areaClosingPreviewLine; // Preview line showing closing segment (from cursor to first point)
+    private Border? _areaDistancePreviewLabel; // Label showing current segment distance while drawing
+
+    /// <summary>
+    /// Handle line measurement click (click-click mode instead of drag)
+    /// </summary>
+    private void HandleLineMeasurementClick(WpfPoint point, MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+
+        if (!_measurementFirstClickDone)
+        {
+            // First click - set start point
+            _measurementFirstClickDone = true;
+            _measurementStart = point;
+            _isMeasuring = true;
+
+            // Create start marker
+            _startMarkerPreview = new WpfEllipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = new SolidColorBrush(WpfColor.FromRgb(255, 0, 0)),
+                Stroke = new SolidColorBrush(WpfColor.FromRgb(255, 255, 255)),
+                StrokeThickness = 1,
+                IsHitTestVisible = false // Don't block mouse events
+            };
+            Canvas.SetLeft(_startMarkerPreview, point.X - 4);
+            Canvas.SetTop(_startMarkerPreview, point.Y - 4);
+            AnnotationCanvas.Children.Add(_startMarkerPreview);
+
+            // Create preview line
+            _measurementPreviewLine = new WpfLine
+            {
+                Stroke = new SolidColorBrush(WpfColor.FromRgb(255, 0, 0)),
+                StrokeThickness = 2,
+                StrokeDashArray = new DoubleCollection { 4, 2 },
+                X1 = point.X,
+                Y1 = point.Y,
+                X2 = point.X,
+                Y2 = point.Y,
+                IsHitTestVisible = false // Don't block mouse events
+            };
+            AnnotationCanvas.Children.Add(_measurementPreviewLine);
+
+            // Capture mouse and subscribe to PdfContainer for reliable mouse tracking
+            PdfContainer.CaptureMouse();
+            PdfContainer.MouseMove += MeasurementPreview_MouseMove;
+
+            vm.StatusMessage = vm.CurrentEditMode == EditMode.Calibrate 
+                ? "Click end point (Hold Shift for axis-lock)" 
+                : "Click end point to complete measurement (Shift = axis-lock)";
+        }
+        else
+        {
+            // Second click - set end point and finalize
+            var endPoint = ApplyAxisLock(_measurementStart, point);
+            FinishLineMeasurement(endPoint);
+        }
+    }
+
+    /// <summary>
+    /// Apply axis-lock when Shift is held (CAD-style)
+    /// </summary>
+    private WpfPoint ApplyAxisLock(WpfPoint start, WpfPoint end)
+    {
+        if (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift))
+        {
+            double dx = Math.Abs(end.X - start.X);
+            double dy = Math.Abs(end.Y - start.Y);
+
+            if (dx > dy)
+            {
+                // Snap to horizontal
+                return new WpfPoint(end.X, start.Y);
+            }
+            else
+            {
+                // Snap to vertical
+                return new WpfPoint(start.X, end.Y);
+            }
+        }
+        return end;
+    }
+
+    private void MeasurementPreview_MouseMove(object sender, WpfMouseEventArgs e)
+    {
+        if (!_isMeasuring || _measurementPreviewLine == null) return;
+
+        var currentPoint = e.GetPosition(PdfImage);
+        var snappedPoint = ApplyAxisLock(_measurementStart, currentPoint);
+
+        _measurementPreviewLine.X2 = snappedPoint.X;
+        _measurementPreviewLine.Y2 = snappedPoint.Y;
+
+        // Calculate distance
+        double dx = snappedPoint.X - _measurementStart.X;
+        double dy = snappedPoint.Y - _measurementStart.Y;
+        double pixelLength = Math.Sqrt(dx * dx + dy * dy);
+
+        // Show live distance in status and on canvas
+        if (DataContext is MainViewModel vm)
+        {
+            string distanceText = vm.IsCalibrated 
+                ? vm.MeasurementCalibration.FormatDistance(pixelLength)
+                : $"{pixelLength:F0} px";
+
+            // Create or update distance preview label on canvas
+            if (_lineDistancePreviewLabel == null)
+            {
+                _lineDistancePreviewLabel = new Border
+                {
+                    Background = new SolidColorBrush(WpfColor.FromArgb(230, 255, 240, 240)),
+                    BorderBrush = new SolidColorBrush(WpfColor.FromRgb(255, 80, 80)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(3),
+                    Padding = new Thickness(6, 3, 6, 3),
+                    IsHitTestVisible = false
+                };
+                var tb = new TextBlock
+                {
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(WpfColor.FromRgb(200, 0, 0))
+                };
+                _lineDistancePreviewLabel.Child = tb;
+                AnnotationCanvas.Children.Add(_lineDistancePreviewLabel);
+            }
+
+            // Update label text
+            if (_lineDistancePreviewLabel.Child is TextBlock textBlock)
+            {
+                textBlock.Text = $"📏 {distanceText}";
+            }
+
+            // Position label at midpoint of line
+            double midX = (_measurementStart.X + snappedPoint.X) / 2;
+            double midY = (_measurementStart.Y + snappedPoint.Y) / 2;
+            Canvas.SetLeft(_lineDistancePreviewLabel, midX + 10);
+            Canvas.SetTop(_lineDistancePreviewLabel, midY - 25);
+
+            // Update status bar
+            bool isShiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+            string shiftHint = isShiftHeld ? " [Axis-Locked]" : "";
+
+            if (vm.IsCalibrated)
+            {
+                vm.StatusMessage = $"Distance: {distanceText} ({pixelLength:F0} px){shiftHint}";
+            }
+            else
+            {
+                vm.StatusMessage = $"Reference line: {pixelLength:F0} pixels{shiftHint}";
+            }
+        }
+    }
+
+    private void FinishLineMeasurement(WpfPoint endPoint)
+    {
+        _isMeasuring = false;
+        _measurementFirstClickDone = false;
+        
+        // Unsubscribe events first
+        PdfContainer.MouseMove -= MeasurementPreview_MouseMove;
+        
+        // Release mouse capture if captured
+        if (PdfContainer.IsMouseCaptured)
+        {
+            PdfContainer.ReleaseMouseCapture();
+        }
+
+        // Remove preview elements
+        if (_measurementPreviewLine != null)
+        {
+            AnnotationCanvas.Children.Remove(_measurementPreviewLine);
+            _measurementPreviewLine = null;
+        }
+        if (_startMarkerPreview != null)
+        {
+            AnnotationCanvas.Children.Remove(_startMarkerPreview);
+            _startMarkerPreview = null;
+        }
+        if (_lineDistancePreviewLabel != null)
+        {
+            AnnotationCanvas.Children.Remove(_lineDistancePreviewLabel);
+            _lineDistancePreviewLabel = null;
+        }
+
+        double dx = endPoint.X - _measurementStart.X;
+        double dy = endPoint.Y - _measurementStart.Y;
+        double pixelLength = Math.Sqrt(dx * dx + dy * dy);
+
+        if (DataContext is MainViewModel vm)
+        {
+            if (pixelLength < 5)
+            {
+                vm.StatusMessage = "Line too short. Click two different points.";
+                return;
+            }
+
+            if (vm.CurrentEditMode == EditMode.Calibrate)
+            {
+                vm.OnCalibrationLineDrawn(pixelLength);
+            }
+            else if (vm.CurrentEditMode == EditMode.MeasureDistance)
+            {
+                vm.AddLineMeasurement(_measurementStart.X, _measurementStart.Y, endPoint.X, endPoint.Y);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Cancel current measurement operation
+    /// </summary>
+    private void CancelMeasurement()
+    {
+        _isMeasuring = false;
+        _measurementFirstClickDone = false;
+        
+        // Unsubscribe events first
+        PdfContainer.MouseMove -= MeasurementPreview_MouseMove;
+        PdfContainer.MouseMove -= AreaMeasurementPreview_MouseMove;
+        
+        // Release mouse capture if captured
+        if (PdfContainer.IsMouseCaptured)
+        {
+            PdfContainer.ReleaseMouseCapture();
+        }
+
+        if (_measurementPreviewLine != null)
+        {
+            AnnotationCanvas.Children.Remove(_measurementPreviewLine);
+            _measurementPreviewLine = null;
+        }
+        if (_startMarkerPreview != null)
+        {
+            AnnotationCanvas.Children.Remove(_startMarkerPreview);
+            _startMarkerPreview = null;
+        }
+        if (_lineDistancePreviewLabel != null)
+        {
+            AnnotationCanvas.Children.Remove(_lineDistancePreviewLabel);
+            _lineDistancePreviewLabel = null;
+        }
+        if (_measurementPolygon != null)
+        {
+            AnnotationCanvas.Children.Remove(_measurementPolygon);
+            _measurementPolygon = null;
+        }
+        if (_areaPreviewLine != null)
+        {
+            AnnotationCanvas.Children.Remove(_areaPreviewLine);
+            _areaPreviewLine = null;
+        }
+        if (_areaClosingPreviewLine != null)
+        {
+            AnnotationCanvas.Children.Remove(_areaClosingPreviewLine);
+            _areaClosingPreviewLine = null;
+        }
+        if (_areaDistancePreviewLabel != null)
+        {
+            AnnotationCanvas.Children.Remove(_areaDistancePreviewLabel);
+            _areaDistancePreviewLabel = null;
+        }
+        _currentAreaMeasurement = null;
+
+        if (DataContext is MainViewModel vm)
+        {
+            vm.StatusMessage = "Measurement cancelled";
+        }
+    }
+
+    private void HandleAreaMeasurementClick(WpfPoint point, MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+
+        // Apply axis-lock for area measurement too
+        WpfPoint snappedPoint = point;
+        if (_currentAreaMeasurement != null && _currentAreaMeasurement.Points.Count > 0)
+        {
+            var lastPoint = _currentAreaMeasurement.Points[_currentAreaMeasurement.Points.Count - 1];
+            snappedPoint = ApplyAxisLock(new WpfPoint(lastPoint.X, lastPoint.Y), point);
+        }
+
+        // Double-click to close polygon
+        if (e.ClickCount == 2)
+        {
+            if (_currentAreaMeasurement != null && _currentAreaMeasurement.Points.Count >= 3)
+            {
+                ConfirmAreaMeasurement();
+            }
+            return;
+        }
+
+        // Create new area measurement if none exists
+        if (_currentAreaMeasurement == null)
+        {
+            _currentAreaMeasurement = new AreaMeasurement();
+
+            _measurementPolygon = new System.Windows.Shapes.Polygon
+            {
+                Stroke = new SolidColorBrush(WpfColor.FromRgb(255, 0, 0)),
+                StrokeThickness = 2,
+                Fill = new SolidColorBrush(WpfColor.FromArgb(50, 255, 0, 0)),
+                IsHitTestVisible = false // Don't block mouse events
+            };
+            AnnotationCanvas.Children.Add(_measurementPolygon);
+            
+            // Capture mouse and subscribe to PdfContainer for reliable mouse tracking
+            PdfContainer.CaptureMouse();
+            PdfContainer.MouseMove += AreaMeasurementPreview_MouseMove;
+        }
+
+        // Add point to measurement
+        _currentAreaMeasurement.AddPoint(snappedPoint.X, snappedPoint.Y);
+        _measurementPolygon?.Points.Add(snappedPoint);
+
+        // Create/update preview line from last point to cursor
+        if (_areaPreviewLine == null)
+        {
+            _areaPreviewLine = new WpfLine
+            {
+                Stroke = new SolidColorBrush(WpfColor.FromRgb(255, 0, 0)),
+                StrokeThickness = 2,
+                StrokeDashArray = new DoubleCollection { 4, 2 },
+                IsHitTestVisible = false // Don't block mouse events
+            };
+            AnnotationCanvas.Children.Add(_areaPreviewLine);
+        }
+        _areaPreviewLine.X1 = snappedPoint.X;
+        _areaPreviewLine.Y1 = snappedPoint.Y;
+        _areaPreviewLine.X2 = snappedPoint.X;
+        _areaPreviewLine.Y2 = snappedPoint.Y;
+
+        // Create closing preview line (from cursor back to first point) when we have 2+ points
+        if (_currentAreaMeasurement.Points.Count >= 2)
+        {
+            if (_areaClosingPreviewLine == null)
+            {
+                _areaClosingPreviewLine = new WpfLine
+                {
+                    Stroke = new SolidColorBrush(WpfColor.FromRgb(255, 100, 100)), // Lighter red for closing line
+                    StrokeThickness = 1.5,
+                    StrokeDashArray = new DoubleCollection { 2, 2 },
+                    IsHitTestVisible = false // Don't block mouse events
+                };
+                AnnotationCanvas.Children.Add(_areaClosingPreviewLine);
+            }
+            var firstPoint = _currentAreaMeasurement.Points[0];
+            _areaClosingPreviewLine.X1 = snappedPoint.X;
+            _areaClosingPreviewLine.Y1 = snappedPoint.Y;
+            _areaClosingPreviewLine.X2 = firstPoint.X;
+            _areaClosingPreviewLine.Y2 = firstPoint.Y;
+        }
+
+        bool isShiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+        string shiftHint = isShiftHeld ? " [Axis-Locked]" : "";
+        vm.StatusMessage = $"Area: {_currentAreaMeasurement.Points.Count} points. Right-click or double-click to close.{shiftHint}";
+    }
+
+    private void AreaMeasurementPreview_MouseMove(object sender, WpfMouseEventArgs e)
+    {
+        if (_currentAreaMeasurement == null || _areaPreviewLine == null) return;
+        if (_currentAreaMeasurement.Points.Count == 0) return;
+
+        var currentPoint = e.GetPosition(PdfImage);
+        var lastPoint = _currentAreaMeasurement.Points[_currentAreaMeasurement.Points.Count - 1];
+        var snappedPoint = ApplyAxisLock(new WpfPoint(lastPoint.X, lastPoint.Y), currentPoint);
+
+        _areaPreviewLine.X2 = snappedPoint.X;
+        _areaPreviewLine.Y2 = snappedPoint.Y;
+
+        // Calculate current segment distance and update preview label
+        double segmentLength = Math.Sqrt(
+            Math.Pow(snappedPoint.X - lastPoint.X, 2) + 
+            Math.Pow(snappedPoint.Y - lastPoint.Y, 2));
+        
+        // Update or create distance preview label
+        if (DataContext is MainViewModel vmLabel)
+        {
+            string distanceText = vmLabel.MeasurementCalibration.FormatDistance(segmentLength);
+            
+            if (_areaDistancePreviewLabel == null)
+            {
+                _areaDistancePreviewLabel = new Border
+                {
+                    Background = new SolidColorBrush(WpfColor.FromArgb(230, 255, 240, 240)),
+                    BorderBrush = new SolidColorBrush(WpfColor.FromRgb(255, 80, 80)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(3),
+                    Padding = new Thickness(6, 3, 6, 3),
+                    IsHitTestVisible = false
+                };
+                var tb = new TextBlock
+                {
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(WpfColor.FromRgb(200, 0, 0))
+                };
+                _areaDistancePreviewLabel.Child = tb;
+                AnnotationCanvas.Children.Add(_areaDistancePreviewLabel);
+            }
+            
+            // Update label text
+            if (_areaDistancePreviewLabel.Child is TextBlock textBlock)
+            {
+                textBlock.Text = $"📏 {distanceText}";
+            }
+            
+            // Position label near cursor (offset to not cover the line)
+            double midX = (lastPoint.X + snappedPoint.X) / 2;
+            double midY = (lastPoint.Y + snappedPoint.Y) / 2;
+            Canvas.SetLeft(_areaDistancePreviewLabel, midX + 10);
+            Canvas.SetTop(_areaDistancePreviewLabel, midY - 25);
+        }
+
+        // Update closing preview line (from cursor back to first point)
+        if (_areaClosingPreviewLine != null && _currentAreaMeasurement.Points.Count >= 2)
+        {
+            var firstPoint = _currentAreaMeasurement.Points[0];
+            _areaClosingPreviewLine.X1 = snappedPoint.X;
+            _areaClosingPreviewLine.Y1 = snappedPoint.Y;
+            _areaClosingPreviewLine.X2 = firstPoint.X;
+            _areaClosingPreviewLine.Y2 = firstPoint.Y;
+        }
+
+        // Show live area preview in status bar if polygon can be closed
+        if (DataContext is MainViewModel vm && _currentAreaMeasurement.Points.Count >= 2)
+        {
+            // Calculate preview area by temporarily adding current point
+            var tempPoints = new List<MeasurementPoint>(_currentAreaMeasurement.Points);
+            tempPoints.Add(new MeasurementPoint(snappedPoint.X, snappedPoint.Y));
+            
+            // Shoelace formula for preview area
+            double previewArea = 0;
+            int n = tempPoints.Count;
+            for (int i = 0; i < n; i++)
+            {
+                int j = (i + 1) % n;
+                previewArea += tempPoints[i].X * tempPoints[j].Y;
+                previewArea -= tempPoints[j].X * tempPoints[i].Y;
+            }
+            previewArea = Math.Abs(previewArea) / 2;
+
+            bool isShiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+            string shiftHint = isShiftHeld ? " [Axis-Locked]" : "";
+            
+            if (vm.IsCalibrated && n >= 3)
+            {
+                string areaStr = vm.MeasurementCalibration.FormatArea(previewArea);
+                vm.StatusMessage = $"Area: {_currentAreaMeasurement.Points.Count} points, Preview: {areaStr}. Right-click to close.{shiftHint}";
+            }
+            else
+            {
+                vm.StatusMessage = $"Area: {_currentAreaMeasurement.Points.Count} points. Right-click or double-click to close.{shiftHint}";
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handle click in SelectMeasurement mode - select measurement or node
+    /// </summary>
+    private void HandleMeasurementSelectionClick(WpfPoint point, MouseButtonEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+
+        const double hitRadius = 10;
+
+        // Check if clicked on a node (for editing)
+        foreach (var measurement in vm.GetCurrentPageMeasurements())
+        {
+            if (measurement is LineMeasurement line)
+            {
+                // Check start point
+                if (Math.Abs(point.X - line.StartX) < hitRadius && Math.Abs(point.Y - line.StartY) < hitRadius)
+                {
+                    StartNodeDrag(measurement, 0, point);
+                    return;
+                }
+                // Check end point
+                if (Math.Abs(point.X - line.EndX) < hitRadius && Math.Abs(point.Y - line.EndY) < hitRadius)
+                {
+                    StartNodeDrag(measurement, 1, point);
+                    return;
+                }
+            }
+            else if (measurement is AreaMeasurement area)
+            {
+                for (int i = 0; i < area.Points.Count; i++)
+                {
+                    var p = area.Points[i];
+                    if (Math.Abs(point.X - p.X) < hitRadius && Math.Abs(point.Y - p.Y) < hitRadius)
+                    {
+                        StartNodeDrag(measurement, i, point);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Check if clicked on measurement line/polygon (for selection)
+        foreach (var measurement in vm.GetCurrentPageMeasurements())
+        {
+            if (IsPointOnMeasurement(point, measurement))
+            {
+                vm.SelectedMeasurement = measurement;
+                RefreshMeasurementsOnCanvas();
+                vm.StatusMessage = $"Selected {measurement.DisplayName}. Press Delete to remove, or drag nodes to edit.";
+                return;
+            }
+        }
+
+        // Clicked on nothing - deselect
+        vm.SelectedMeasurement = null;
+        RefreshMeasurementsOnCanvas();
+    }
+
+    private bool IsPointOnMeasurement(WpfPoint point, MeasurementAnnotation measurement)
+    {
+        const double hitDistance = 8;
+
+        if (measurement is LineMeasurement line)
+        {
+            return DistanceToLineSegment(point, line.StartX, line.StartY, line.EndX, line.EndY) < hitDistance;
+        }
+        else if (measurement is AreaMeasurement area && area.Points.Count >= 3)
+        {
+            // Check if point is inside polygon or near edges
+            for (int i = 0; i < area.Points.Count; i++)
+            {
+                var p1 = area.Points[i];
+                var p2 = area.Points[(i + 1) % area.Points.Count];
+                if (DistanceToLineSegment(point, p1.X, p1.Y, p2.X, p2.Y) < hitDistance)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private double DistanceToLineSegment(WpfPoint p, double x1, double y1, double x2, double y2)
+    {
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double lengthSq = dx * dx + dy * dy;
+
+        if (lengthSq == 0) return Math.Sqrt((p.X - x1) * (p.X - x1) + (p.Y - y1) * (p.Y - y1));
+
+        double t = Math.Max(0, Math.Min(1, ((p.X - x1) * dx + (p.Y - y1) * dy) / lengthSq));
+        double projX = x1 + t * dx;
+        double projY = y1 + t * dy;
+
+        return Math.Sqrt((p.X - projX) * (p.X - projX) + (p.Y - projY) * (p.Y - projY));
+    }
+
+    private void StartNodeDrag(MeasurementAnnotation measurement, int nodeIndex, WpfPoint startPoint)
+    {
+        _editingMeasurement = measurement;
+        _selectedMeasurementNodeIndex = nodeIndex;
+        _measurementStart = startPoint;
+
+        if (DataContext is MainViewModel vm)
+        {
+            vm.SelectedMeasurement = measurement;
+        }
+
+        AnnotationCanvas.CaptureMouse();
+        AnnotationCanvas.MouseMove += MeasurementNode_MouseMove;
+        AnnotationCanvas.MouseLeftButtonUp += MeasurementNode_MouseLeftButtonUp;
+    }
+
+    private void MeasurementNode_MouseMove(object sender, WpfMouseEventArgs e)
+    {
+        if (_editingMeasurement == null || _selectedMeasurementNodeIndex == null) return;
+
+        var currentPoint = e.GetPosition(PdfImage);
+        var snappedPoint = ApplyAxisLock(_measurementStart, currentPoint);
+
+        // Update the node position
+        if (_editingMeasurement is LineMeasurement line)
+        {
+            if (_selectedMeasurementNodeIndex == 0)
+            {
+                line.StartX = snappedPoint.X;
+                line.StartY = snappedPoint.Y;
+            }
+            else
+            {
+                line.EndX = snappedPoint.X;
+                line.EndY = snappedPoint.Y;
+            }
+        }
+        else if (_editingMeasurement is AreaMeasurement area && _selectedMeasurementNodeIndex < area.Points.Count)
+        {
+            area.Points[_selectedMeasurementNodeIndex.Value] = new MeasurementPoint(snappedPoint.X, snappedPoint.Y);
+        }
+
+        RefreshMeasurementsOnCanvas();
+
+        if (DataContext is MainViewModel vm)
+        {
+            if (_editingMeasurement is LineMeasurement lineMeasurement)
+            {
+                vm.StatusMessage = $"Distance: {vm.MeasurementCalibration.FormatDistance(lineMeasurement.GetPixelLength())}";
+            }
+            else if (_editingMeasurement is AreaMeasurement areaMeasurement)
+            {
+                vm.StatusMessage = $"Area: {vm.MeasurementCalibration.FormatArea(areaMeasurement.GetPixelArea())}";
+            }
+        }
+    }
+
+    private void MeasurementNode_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        AnnotationCanvas.ReleaseMouseCapture();
+        AnnotationCanvas.MouseMove -= MeasurementNode_MouseMove;
+        AnnotationCanvas.MouseLeftButtonUp -= MeasurementNode_MouseLeftButtonUp;
+
+        _editingMeasurement = null;
+        _selectedMeasurementNodeIndex = null;
+
+        RefreshMeasurementsOnCanvas();
+    }
+
+    private void ShowCalibrationDialog(double pixelLength)
+    {
+        var dialog = new CalibrationDialog(pixelLength)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() == true && dialog.IsApplied)
+        {
+            if (DataContext is MainViewModel vm)
+            {
+                vm.ApplyCalibration(dialog.RealLength, dialog.SelectedUnit);
+            }
+        }
+    }
+
+    private void RefreshMeasurementsOnCanvas()
+    {
+        if (DataContext is not MainViewModel vm) return;
+
+        // Remove existing measurement visuals (those with "measurement" tag)
+        var toRemove = AnnotationCanvas.Children.OfType<FrameworkElement>()
+            .Where(fe => fe.Tag?.ToString() == "measurement")
+            .ToList();
+        foreach (var element in toRemove)
+        {
+            AnnotationCanvas.Children.Remove(element);
+        }
+
+        // Draw measurements for current page
+        var measurements = vm.GetCurrentPageMeasurements().ToList();
+        foreach (var measurement in measurements)
+        {
+            if (measurement is LineMeasurement line)
+            {
+                DrawLineMeasurement(line, vm);
+            }
+            else if (measurement is AreaMeasurement area)
+            {
+                DrawAreaMeasurement(area, vm);
+            }
+        }
+    }
+
+    private void DrawLineMeasurement(LineMeasurement line, MainViewModel vm)
+    {
+        // Draw line
+        var lineVisual = new WpfLine
+        {
+            X1 = line.StartX,
+            Y1 = line.StartY,
+            X2 = line.EndX,
+            Y2 = line.EndY,
+            Stroke = new SolidColorBrush((WpfColor)WpfColorConverter.ConvertFromString(line.Color)),
+            StrokeThickness = line.StrokeWidth,
+            Tag = "measurement"
+        };
+        AnnotationCanvas.Children.Add(lineVisual);
+
+        // Draw end markers
+        double markerSize = 6;
+        DrawMarker(line.StartX, line.StartY, markerSize, line.Color);
+        DrawMarker(line.EndX, line.EndY, markerSize, line.Color);
+
+        // Draw label at midpoint
+        if (line.ShowLabel)
+        {
+            var midpoint = line.GetMidpoint();
+            string labelText = vm.MeasurementCalibration.FormatDistance(line.GetPixelLength());
+            DrawMeasurementLabel(midpoint.X, midpoint.Y, labelText, line.GetAngle());
+        }
+    }
+
+    private void DrawAreaMeasurement(AreaMeasurement area, MainViewModel vm)
+    {
+        if (area.Points.Count < 3) return;
+
+        try
+        {
+            var polygon = new System.Windows.Shapes.Polygon
+            {
+                Stroke = new SolidColorBrush((WpfColor)WpfColorConverter.ConvertFromString(area.Color)),
+                StrokeThickness = area.StrokeWidth,
+                Fill = new SolidColorBrush(WpfColor.FromArgb(30, 255, 0, 0)),
+                Tag = "measurement"
+            };
+
+            foreach (var point in area.Points)
+            {
+                polygon.Points.Add(new WpfPoint(point.X, point.Y));
+            }
+            AnnotationCanvas.Children.Add(polygon);
+
+            // Draw node markers at each vertex
+            double markerSize = 6;
+            foreach (var point in area.Points)
+            {
+                DrawMarker(point.X, point.Y, markerSize, area.Color);
+            }
+
+            // Draw labels if enabled
+            if (area.ShowLabel)
+            {
+                // Draw side length labels on each edge
+                for (int i = 0; i < area.Points.Count; i++)
+                {
+                    var p1 = area.Points[i];
+                    var p2 = area.Points[(i + 1) % area.Points.Count];
+                    
+                    double sideLength = p1.DistanceTo(p2);
+                    string sideLengthText = vm.MeasurementCalibration.FormatDistance(sideLength);
+                    
+                    double midX = (p1.X + p2.X) / 2;
+                    double midY = (p1.Y + p2.Y) / 2;
+                    
+                    DrawSideLengthLabelSimple(midX, midY, sideLengthText, i + 1);
+                }
+                
+                var centroid = area.GetCentroid();
+                string areaText = vm.MeasurementCalibration.FormatArea(area.GetPixelArea());
+                string perimeterText = vm.MeasurementCalibration.FormatDistance(area.GetPixelLength());
+                string labelText = $"{areaText}\n(รวม: {perimeterText})";
+                DrawMeasurementLabel(centroid.X, centroid.Y, labelText, 0);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error drawing area measurement: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Draw a simple label for side length (no rotation, easier positioning)
+    /// </summary>
+    private void DrawSideLengthLabelSimple(double x, double y, string text, int sideNumber)
+    {
+        var border = new Border
+        {
+            Background = new SolidColorBrush(WpfColor.FromArgb(230, 255, 255, 220)), // Light yellow
+            BorderBrush = new SolidColorBrush(WpfColor.FromRgb(200, 160, 0)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(4, 2, 4, 2),
+            Tag = "measurement"
+        };
+
+        var textBlock = new TextBlock
+        {
+            Text = text,
+            FontSize = 9,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(WpfColor.FromRgb(100, 70, 0))
+        };
+        border.Child = textBlock;
+
+        // Simple offset - alternate above/below based on side number
+        double offsetY = (sideNumber % 2 == 0) ? -18 : 5;
+        
+        Canvas.SetLeft(border, x - 20);
+        Canvas.SetTop(border, y + offsetY);
+        
+        AnnotationCanvas.Children.Add(border);
+    }
+
+    private void DrawMarker(double x, double y, double size, string color)
+    {
+        var marker = new WpfEllipse
+        {
+            Width = size,
+            Height = size,
+            Fill = new SolidColorBrush((WpfColor)WpfColorConverter.ConvertFromString(color)),
+            Tag = "measurement"
+        };
+        Canvas.SetLeft(marker, x - size / 2);
+        Canvas.SetTop(marker, y - size / 2);
+        AnnotationCanvas.Children.Add(marker);
+    }
+
+    private void DrawMeasurementLabel(double x, double y, string text, double angle)
+    {
+        var border = new Border
+        {
+            Background = new SolidColorBrush(WpfColor.FromArgb(230, 255, 255, 255)),
+            BorderBrush = new SolidColorBrush(WpfColor.FromRgb(255, 0, 0)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(4, 2, 4, 2),
+            Tag = "measurement"
+        };
+
+        var textBlock = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(WpfColor.FromRgb(200, 0, 0))
+        };
+        border.Child = textBlock;
+
+        // Position label with offset to avoid overlapping with line
+        Canvas.SetLeft(border, x + 5);
+        Canvas.SetTop(border, y - 10);
+        AnnotationCanvas.Children.Add(border);
+    }
+
+    #endregion
+
     // Inline editing state
     private WpfTextBox? _editingTextBox;
     private Border? _editingBorder;
@@ -855,13 +1806,14 @@ public partial class MainWindow : Window
             
             element.CaptureMouse();
             
-            // Select this annotation in ViewModel and show resize handles
+            // Select this annotation in ViewModel and show resize/rotation handles
             if (DataContext is MainViewModel vm)
             {
                 vm.SelectedAnnotation = annotation;
                 
                 // Show resize handles for resizable elements (images and shapes)
-                if (annotation is ImageAnnotationItem || annotation is ShapeAnnotationItem)
+                // Show rotation handle for text elements
+                if (annotation is ImageAnnotationItem || annotation is ShapeAnnotationItem || annotation is TextAnnotationItem)
                 {
                     _resizeHandlesManager?.ShowHandles(element, annotation);
                 }
@@ -915,8 +1867,8 @@ public partial class MainWindow : Window
                 _draggedAnnotation.X = newX;
                 _draggedAnnotation.Y = newY;
                 
-                // Update resize handles position after dragging
-                if (_draggedAnnotation is ImageAnnotationItem || _draggedAnnotation is ShapeAnnotationItem)
+                // Update resize/rotation handles position after dragging
+                if (_draggedAnnotation is ImageAnnotationItem || _draggedAnnotation is ShapeAnnotationItem || _draggedAnnotation is TextAnnotationItem)
                 {
                     if (_draggedElement is FrameworkElement fe)
                     {
@@ -1161,11 +2113,28 @@ public partial class MainWindow : Window
                 contextMenu.Items.Add(removeBackgroundItem);
                 
                 var advancedRemoveItem = new MenuItem { Header = "Advanced Remove Background..." };
-                advancedRemoveItem.Click += (s, args) =>
+                advancedRemoveItem.Click += async (s, args) =>
                 {
-                    OpenAdvancedBackgroundRemoval(imageAnnotation);
+                    await OpenAdvancedBackgroundRemovalAsync(imageAnnotation);
                 };
                 contextMenu.Items.Add(advancedRemoveItem);
+                
+                // Add to Header/Footer option for image annotations
+                contextMenu.Items.Add(new Separator());
+                var addImageToHeaderFooterItem = new MenuItem 
+                { 
+                    Header = "Add to Header/Footer (All Pages)",
+                    Icon = new TextBlock { Text = "📄", FontSize = 12 },
+                    ToolTip = "Convert this image to Header/Footer system.\nIt will appear on all pages and can be managed via Header/Footer dialog."
+                };
+                addImageToHeaderFooterItem.Click += (s, args) =>
+                {
+                    if (DataContext is MainViewModel vm)
+                    {
+                        vm.ConvertAnnotationToHeaderFooter(annotation);
+                    }
+                };
+                contextMenu.Items.Add(addImageToHeaderFooterItem);
             }
 
             
@@ -1274,7 +2243,10 @@ public partial class MainWindow : Window
         WpfPanel.SetZIndex(element, minZIndex - 1);
     }
     
-    private void OpenAdvancedBackgroundRemoval(ImageAnnotationItem imageAnnotation)
+    /// <summary>
+    /// PERFORMANCE FIX: Made async to avoid blocking UI thread during file I/O
+    /// </summary>
+    private async Task OpenAdvancedBackgroundRemovalAsync(ImageAnnotationItem imageAnnotation)
     {
         if (DataContext is not MainViewModel vm) return;
         
@@ -1293,12 +2265,13 @@ public partial class MainWindow : Window
         
         if (dialog.ShowDialog() == true && dialog.ResultImageBytes != null)
         {
-            // Save result to temp file
+            // Save result to temp file - PERFORMANCE FIX: Use async I/O
             string tempPath = System.IO.Path.Combine(
                 System.IO.Path.GetTempPath(),
                 $"advanced_bg_removed_{Guid.NewGuid()}.png");
             
-            System.IO.File.WriteAllBytes(tempPath, dialog.ResultImageBytes);
+            var resultBytes = dialog.ResultImageBytes;
+            await Task.Run(() => System.IO.File.WriteAllBytes(tempPath, resultBytes));
             
             // Update the annotation
             imageAnnotation.ImagePath = tempPath;
@@ -1410,6 +2383,13 @@ public partial class MainWindow : Window
 
             Canvas.SetLeft(border, textAnn.X * zoomScale);
             Canvas.SetTop(border, textAnn.Y * zoomScale);
+            
+            // Apply rotation transform if annotation has rotation
+            if (textAnn.Rotation != 0)
+            {
+                border.RenderTransformOrigin = new WpfPoint(0.5, 0.5);
+                border.RenderTransform = new RotateTransform(textAnn.Rotation);
+            }
 
             AnnotationCanvas.Children.Add(border);
         }
@@ -1566,6 +2546,13 @@ public partial class MainWindow : Window
 
             Canvas.SetLeft(border, imgAnn.X * zoomScale);
             Canvas.SetTop(border, imgAnn.Y * zoomScale);
+            
+            // Apply rotation transform if annotation has rotation
+            if (imgAnn.Rotation != 0)
+            {
+                border.RenderTransformOrigin = new WpfPoint(0.5, 0.5);
+                border.RenderTransform = new RotateTransform(imgAnn.Rotation);
+            }
 
             AnnotationCanvas.Children.Add(border);
         }
@@ -1598,11 +2585,46 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Clear all annotation previews (called after save or page change)
+    /// Properly unsubscribes event handlers to prevent memory leaks.
     /// </summary>
     public void ClearAnnotationPreviews()
     {
         _resizeHandlesManager?.HideHandles();
+        
+        // PERFORMANCE FIX: Unsubscribe all event handlers before clearing to prevent memory leaks
+        foreach (UIElement child in AnnotationCanvas.Children)
+        {
+            CleanupAnnotationElement(child);
+        }
+        
         AnnotationCanvas.Children.Clear();
+    }
+
+    /// <summary>
+    /// Cleanup event handlers from an annotation element to prevent memory leaks.
+    /// Must be called before removing elements from canvas.
+    /// </summary>
+    private void CleanupAnnotationElement(UIElement element)
+    {
+        if (element is FrameworkElement fe)
+        {
+            // Unsubscribe common annotation element handlers
+            fe.MouseLeftButtonDown -= Element_MouseLeftButtonDown;
+            fe.MouseMove -= Element_MouseMove;
+            fe.MouseLeftButtonUp -= Element_MouseLeftButtonUp;
+            fe.MouseRightButtonDown -= Element_MouseRightButtonDown;
+            
+            // Unsubscribe extracted content handlers
+            fe.MouseLeftButtonDown -= ExtractedContent_MouseLeftButtonDown;
+            fe.MouseMove -= ExtractedContent_MouseMove;
+            fe.MouseLeftButtonUp -= ExtractedContent_MouseLeftButtonUp;
+            
+            // Unsubscribe image crop handlers
+            fe.MouseLeftButtonDown -= ImageCrop_MouseLeftButtonDown;
+            fe.MouseMove -= ImageCrop_MouseMove;
+            fe.MouseLeftButtonUp -= ImageCrop_MouseLeftButtonUp;
+            fe.KeyDown -= ImageCrop_KeyDown;
+        }
     }
 
     /// <summary>
@@ -1612,7 +2634,11 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
 
-        // Clear existing previews
+        // PERFORMANCE FIX: Properly cleanup before clearing to prevent memory leaks
+        foreach (UIElement child in AnnotationCanvas.Children)
+        {
+            CleanupAnnotationElement(child);
+        }
         AnnotationCanvas.Children.Clear();
 
         // Re-render all annotations for current page
@@ -1763,8 +2789,9 @@ public partial class MainWindow : Window
             {
                 try
                 {
+                    // PERFORMANCE FIX: Don't use 'using' with stream assigned to StreamSource
                     var bitmapImage = new BitmapImage();
-                    using var ms = new System.IO.MemoryStream(imageItem.ImageBytes);
+                    var ms = new System.IO.MemoryStream(imageItem.ImageBytes);
                     bitmapImage.BeginInit();
                     bitmapImage.StreamSource = ms;
                     bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
@@ -1861,7 +2888,7 @@ public partial class MainWindow : Window
             Header = "Convert to Image Annotation",
             Icon = new TextBlock { Text = "🖼️", FontSize = 14 }
         };
-        convertItem.Click += (s, e) => ConvertExtractedImageToAnnotation(imageItem);
+        convertItem.Click += async (s, e) => await ConvertExtractedImageToAnnotationAsync(imageItem);
         menu.Items.Add(convertItem);
 
         menu.Items.Add(new Separator());
@@ -1942,8 +2969,9 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Convert extracted image to editable image annotation
+    /// PERFORMANCE FIX: Made async to avoid blocking UI thread during file I/O
     /// </summary>
-    private void ConvertExtractedImageToAnnotation(ExtractedImageItem imageItem)
+    private async Task ConvertExtractedImageToAnnotationAsync(ExtractedImageItem imageItem)
     {
         if (DataContext is not MainViewModel vm) return;
 
@@ -1954,7 +2982,8 @@ public partial class MainWindow : Window
 
         try
         {
-            System.IO.File.WriteAllBytes(tempPath, imageItem.ImageBytes);
+            // PERFORMANCE FIX: Use async I/O
+            await Task.Run(() => System.IO.File.WriteAllBytes(tempPath, imageItem.ImageBytes));
 
             // Create new image annotation from extracted image
             var annotation = new ImageAnnotationItem
@@ -2498,10 +3527,16 @@ public partial class MainWindow : Window
         {
             AddCustomTextBoxPreview(customBox, imageHeightPx, pixelsPerPoint);
         }
+        
+        // Add custom image boxes
+        foreach (var imageBox in data.CustomImageBoxes)
+        {
+            AddCustomImageBoxPreview(imageBox, imageHeightPx, pixelsPerPoint);
+        }
     }
 
     /// <summary>
-    /// Add a custom text box preview to the canvas
+    /// Add a custom text box preview to the canvas (with rotation support)
     /// </summary>
     private void AddCustomTextBoxPreview(MainViewModel.CustomTextBoxPreview textBox, double imageHeightPx, double pixelsPerPoint)
     {
@@ -2530,6 +3565,10 @@ public partial class MainWindow : Window
         // This matches the annotation coordinate system
         double x = textBox.OffsetX * pixelsPerPoint;
         double y = imageHeightPx - (textBox.OffsetY * pixelsPerPoint);
+        
+        // Convert box size from points to pixels
+        double boxWidthPx = textBox.BoxWidth * pixelsPerPoint;
+        double boxHeightPx = textBox.BoxHeight * pixelsPerPoint;
 
         // Add text (auto-fit width)
         if (!string.IsNullOrEmpty(textBox.Text))
@@ -2554,9 +3593,68 @@ public partial class MainWindow : Window
             }
             catch { }
 
+            // Apply rotation if needed
+            if (Math.Abs(textBox.Rotation) > 0.001)
+            {
+                // Center of rotation is the center of the text box
+                textBlock.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+                textBlock.RenderTransform = new RotateTransform(textBox.Rotation);
+            }
+
             Canvas.SetLeft(textBlock, x);
             Canvas.SetTop(textBlock, y);
             AnnotationCanvas.Children.Add(textBlock);
+        }
+    }
+    
+    /// <summary>
+    /// Add a custom image box preview to the canvas (with rotation and opacity support)
+    /// </summary>
+    private void AddCustomImageBoxPreview(MainViewModel.CustomImageBoxPreview imageBox, double imageHeightPx, double pixelsPerPoint)
+    {
+        if (string.IsNullOrEmpty(imageBox.ImagePath) || !System.IO.File.Exists(imageBox.ImagePath))
+            return;
+        
+        try
+        {
+            var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+            bitmap.BeginInit();
+            bitmap.UriSource = new Uri(imageBox.ImagePath);
+            bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            
+            // Convert size from points to pixels
+            double widthPx = imageBox.Width * pixelsPerPoint;
+            double heightPx = imageBox.Height * pixelsPerPoint;
+            
+            // Convert position from PDF points to screen pixels
+            double x = imageBox.OffsetX * pixelsPerPoint;
+            double y = imageHeightPx - (imageBox.OffsetY * pixelsPerPoint) - heightPx;
+            
+            var image = new System.Windows.Controls.Image
+            {
+                Source = bitmap,
+                Width = widthPx,
+                Height = heightPx,
+                Stretch = System.Windows.Media.Stretch.Fill,
+                Opacity = imageBox.Opacity
+            };
+            
+            // Apply rotation if needed
+            if (Math.Abs(imageBox.Rotation) > 0.001)
+            {
+                image.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+                image.RenderTransform = new RotateTransform(imageBox.Rotation);
+            }
+            
+            Canvas.SetLeft(image, x);
+            Canvas.SetTop(image, y);
+            AnnotationCanvas.Children.Add(image);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error loading custom image box preview: {ex.Message}");
         }
     }
 
@@ -2769,10 +3867,31 @@ public partial class MainWindow : Window
                     e.Handled = true;
                 }
             }
-            else if (e.Key == Key.Escape && DataContext is MainViewModel vmEsc && vmEsc.IsEditMode)
+            else if (e.Key == Key.Escape && DataContext is MainViewModel vmEsc)
             {
+                // Cancel measurement in progress first
+                if (_isMeasuring || _measurementFirstClickDone || _currentAreaMeasurement != null)
+                {
+                    CancelMeasurement();
+                    e.Handled = true;
+                }
+                // Exit measurement mode if not measuring
+                else if (vmEsc.IsMeasuring)
+                {
+                    vmEsc.ExitMeasurementModeCommand.Execute(null);
+                    e.Handled = true;
+                }
                 // Exit edit mode with Escape
-                vmEsc.ToggleViewEditModeCommand.Execute(null);
+                else if (vmEsc.IsEditMode)
+                {
+                    vmEsc.ToggleViewEditModeCommand.Execute(null);
+                    e.Handled = true;
+                }
+            }
+            // Delete key for measurements
+            else if (e.Key == Key.Delete && DataContext is MainViewModel vmDel && vmDel.SelectedMeasurement != null)
+            {
+                vmDel.DeleteSelectedMeasurementCommand.Execute(null);
                 e.Handled = true;
             }
             // Page navigation with PageUp/PageDown keys (non-presentation mode)
