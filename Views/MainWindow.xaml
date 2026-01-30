@@ -34,6 +34,8 @@
                 <MenuItem Header="_Save" Command="{Binding SaveCommand}" InputGestureText="Ctrl+S"/>
                 <MenuItem Header="Save _As..." Command="{Binding SaveAsCommand}" InputGestureText="Ctrl+Shift+S"/>
                 <Separator/>
+                <MenuItem Header="_Print..." Command="{Binding PrintCommand}" InputGestureText="Ctrl+P"/>
+                <Separator/>
                 <MenuItem Header="_Exit" Command="{Binding ExitCommand}" InputGestureText="Alt+F4"/>
             </MenuItem>
             <MenuItem Header="_Edit">
@@ -81,6 +83,12 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="💾" FontSize="16" Margin="0,0,4,0"/>
                         <TextBlock Text="Save"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ToolbarButton}" Command="{Binding PrintCommand}" ToolTip="Print (Ctrl+P)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🖨️" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Print"/>
                     </StackPanel>
                 </Button>
 

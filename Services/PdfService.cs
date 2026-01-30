@@ -485,7 +485,11 @@ public class PdfService : IPdfService, IDisposable
     {
         try
         {
-            using var reader = new PdfReader(sourceFile);
+            // Use in-memory bytes when possible to avoid file locking issues
+            bool useMemoryStream = sourceFile == _currentFilePath && _pdfBytes != null;
+            
+            using var memStream = useMemoryStream ? new MemoryStream(_pdfBytes!, writable: false) : null;
+            using var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile);
             using var writer = new PdfWriter(destFile);
             using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
             using var destDoc = new iText.Kernel.Pdf.PdfDocument(writer);
@@ -516,7 +520,11 @@ public class PdfService : IPdfService, IDisposable
     {
         try
         {
-            using var reader = new PdfReader(sourceFile);
+            // Use in-memory bytes when possible to avoid file locking issues
+            bool useMemoryStream = sourceFile == _currentFilePath && _pdfBytes != null;
+            
+            using var memStream = useMemoryStream ? new MemoryStream(_pdfBytes!, writable: false) : null;
+            using var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile);
             using var writer = new PdfWriter(destFile);
             using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
             using var destDoc = new iText.Kernel.Pdf.PdfDocument(writer);
@@ -587,7 +595,12 @@ public class PdfService : IPdfService, IDisposable
                     }
                 }
 
-                using (var reader = new PdfReader(sourceFile))
+                // Use in-memory bytes when possible to avoid file locking issues
+                // Only use memory stream if sourceFile is still the original file (no reorder/duplication temp file)
+                bool useMemoryStream = sourceFile == _currentFilePath && _pdfBytes != null;
+                
+                using var memStream = useMemoryStream ? new MemoryStream(_pdfBytes!, writable: false) : null;
+                using (var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile))
                 using (var writer = new PdfWriter(tempFile))
                 using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
                 {

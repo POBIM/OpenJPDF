@@ -3858,6 +3858,15 @@ public partial class MainWindow : Window
                     e.Handled = true;
                 }
             }
+            // Ctrl+P: Print
+            else if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                if (DataContext is MainViewModel vmPrint && vmPrint.IsFileLoaded)
+                {
+                    vmPrint.PrintCommand.Execute(null);
+                    e.Handled = true;
+                }
+            }
             // Ctrl+V: Paste image from clipboard
             else if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
             {

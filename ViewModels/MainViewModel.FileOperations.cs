@@ -799,6 +799,37 @@ public partial class MainViewModel
 
     #endregion
 
+    #region Print Commands
+
+    [RelayCommand]
+    private void Print()
+    {
+        if (!IsFileLoaded) return;
+
+        try
+        {
+            var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+            int totalPages = pdfService.PageCount;
+            
+            // Show custom print preview dialog
+            var printDialog = new Views.PrintPreviewDialog(pdfService, totalPages, CurrentPageIndex);
+            printDialog.Owner = Application.Current.MainWindow;
+            
+            if (printDialog.ShowDialog() == true)
+            {
+                StatusMessage = "Print job sent successfully";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Print failed: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"Print error: {ex.Message}");
+            MessageBox.Show($"Failed to open print dialog: {ex.Message}", "Print Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    #endregion
+
     #region Navigation Commands
 
     [RelayCommand]
