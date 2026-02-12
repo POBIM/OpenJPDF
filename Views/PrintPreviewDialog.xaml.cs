@@ -25,6 +25,7 @@ public partial class PrintPreviewDialog : Window
     private readonly IPdfService _pdfService;
     private readonly int _totalPages;
     private readonly int _currentPageIndex;
+    private readonly int[]? _pageOrderMapping; // Maps display index → original PDF page index
     
     private int _previewPageIndex;
     private double _previewZoom = 1.0;
@@ -43,13 +44,14 @@ public partial class PrintPreviewDialog : Window
     
     public bool PrintRequested { get; private set; }
     
-    public PrintPreviewDialog(IPdfService pdfService, int totalPages, int currentPageIndex)
+    public PrintPreviewDialog(IPdfService pdfService, int totalPages, int currentPageIndex, int[]? pageOrderMapping = null)
     {
         InitializeComponent();
         
         _pdfService = pdfService;
         _totalPages = totalPages;
         _currentPageIndex = currentPageIndex;
+        _pageOrderMapping = pageOrderMapping;
         _previewPageIndex = currentPageIndex;
         
         LoadPrinters();
@@ -311,8 +313,9 @@ public partial class PrintPreviewDialog : Window
             MarginBorder.Margin = new Thickness(margin * displayScale / 2);
             PreviewImage.Margin = new Thickness(margin * displayScale / 2);
             
-            // Render page
-            var pageImage = _pdfService.GetPageImage(_previewPageIndex, 1.5f);
+            // Render page (map display index to original PDF page index)
+            int originalPageIndex = GetOriginalPageIndex(_previewPageIndex);
+            var pageImage = _pdfService.GetPageImage(originalPageIndex, 1.5f);
             
             if (pageImage != null)
             {
@@ -342,6 +345,17 @@ public partial class PrintPreviewDialog : Window
         {
             System.Diagnostics.Debug.WriteLine($"Error updating preview: {ex.Message}");
         }
+    }
+    
+    /// <summary>
+    /// Maps a display page index to the original PDF page index,
+    /// accounting for any page reordering the user has done.
+    /// </summary>
+    private int GetOriginalPageIndex(int displayIndex)
+    {
+        if (_pageOrderMapping != null && displayIndex >= 0 && displayIndex < _pageOrderMapping.Length)
+            return _pageOrderMapping[displayIndex];
+        return displayIndex;
     }
     
     private BitmapSource ConvertToGrayscale(BitmapSource source)
@@ -482,8 +496,9 @@ public partial class PrintPreviewDialog : Window
                         Height = wpfHeight
                     };
                     
-                    // Render page at high quality
-                    var pageImage = _pdfService.GetPageImage(pageIndex, 2.0f);
+                    // Render page at high quality (map display index to original PDF page index)
+                    int originalIdx = GetOriginalPageIndex(pageIndex);
+                    var pageImage = _pdfService.GetPageImage(originalIdx, 2.0f);
                     
                     if (pageImage != null)
                     {

@@ -753,21 +753,39 @@ public class PdfService : IPdfService, IDisposable
                             float padding = 2f * SCREEN_TO_PDF;
                             float borderWidthPdf = textAnn.BorderWidth * SCREEN_TO_PDF;
 
-                            // Calculate text width using PDF font metrics
-                            // GetWidth(text, fontSize) returns width in POINTS directly
+                            // Calculate text width using PDF font metrics (needed for underline)
                             float pdfTextWidth = font.GetWidth(textAnn.Text, pdfFontSize);
 
-                            // Box dimensions based on PDF font
-                            float boxWidth = pdfTextWidth + (padding * 2);
-                            float boxHeight = pdfFontSize * 1.4f + (padding * 2); // 1.4 for line height with some margin
+                            // Box dimensions: use WPF-measured dimensions converted to PDF points
+                            // These match exactly what the user sees on screen for pixel-perfect positioning
+                            float boxWidth = (textAnn.Width > 0)
+                                ? (float)textAnn.Width * SCREEN_TO_PDF
+                                : pdfTextWidth + (padding * 2);
+                            float boxHeight = (textAnn.Height > 0)
+                                ? (float)textAnn.Height * SCREEN_TO_PDF
+                                : pdfFontSize * 1.2f + (padding * 2);
 
                             // PDF Y coordinate: 0 is at bottom, use mediaBoxTop for correct positioning
                             float boxX = pdfX;
                             float boxY = mediaBoxTop - pdfY - boxHeight;
 
-                            // Text position: PDF draws from baseline (approximately 80% up from bottom of text)
+                            // Text baseline: use actual font ascent for precise positioning
+                            // annotation.Y = top of text box from page top (in DIPs)
+                            // baseline = box_top - padding - ascent (in PDF coords, Y increases upward)
+                            float ascent;
+                            try
+                            {
+                                var fontMetrics = font.GetFontProgram().GetFontMetrics();
+                                float ascenderUnits = fontMetrics.GetTypoAscender();
+                                ascent = ascenderUnits / 1000f * pdfFontSize;
+                                if (ascent <= 0) ascent = pdfFontSize * 0.75f;
+                            }
+                            catch
+                            {
+                                ascent = pdfFontSize * 0.75f; // Safe fallback
+                            }
                             float textX = boxX + padding;
-                            float textY = boxY + padding + (pdfFontSize * 0.25f);
+                            float textY = mediaBoxTop - pdfY - padding - ascent;
 
                             // For rotated text, apply rotation to background and border too
                             bool hasRotation = Math.Abs(textAnn.Rotation) > 0.1;

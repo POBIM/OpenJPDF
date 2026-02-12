@@ -811,8 +811,15 @@ public partial class MainViewModel
             var pdfService = ActiveDocument?.PdfService ?? _pdfService;
             int totalPages = pdfService.PageCount;
             
+            // Build page order mapping so print uses reordered page sequence
+            int[]? pageOrderMapping = null;
+            if (PageThumbnails.Count > 0)
+            {
+                pageOrderMapping = PageThumbnails.Select(t => t.OriginalPageIndex).ToArray();
+            }
+            
             // Show custom print preview dialog
-            var printDialog = new Views.PrintPreviewDialog(pdfService, totalPages, CurrentPageIndex);
+            var printDialog = new Views.PrintPreviewDialog(pdfService, totalPages, CurrentPageIndex, pageOrderMapping);
             printDialog.Owner = Application.Current.MainWindow;
             
             if (printDialog.ShowDialog() == true)
