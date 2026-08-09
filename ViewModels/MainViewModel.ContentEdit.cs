@@ -10,6 +10,7 @@ using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenJPDF.Models;
+using OpenJPDF.Helpers;
 using OpenJPDF.Services;
 
 namespace OpenJPDF.ViewModels;
@@ -21,7 +22,6 @@ public partial class MainViewModel
 {
     #region Private Fields for Content Editing
 
-    private ContentExtractionService? _contentExtractionService;
     private readonly Dictionary<int, List<ExtractedTextElement>> _extractedTextByPage = new();
     private readonly Dictionary<int, List<ExtractedImageElement>> _extractedImagesByPage = new();
 
@@ -72,22 +72,49 @@ public partial class MainViewModel
         {
             StatusMessage = "Extracting content from page...";
 
-            // Initialize extraction service if needed
-            _contentExtractionService ??= new ContentExtractionService(FilePath);
-
-            // Check if already extracted for this page
-            if (!_extractedTextByPage.ContainsKey(CurrentPageIndex))
+            int sourcePageIndex = CurrentPageIndex;
+            if (CurrentPageIndex >= 0 && CurrentPageIndex < PageThumbnails.Count)
             {
-                var textElements = await Task.Run(() =>
-                    _contentExtractionService.ExtractTextFromPage(CurrentPageIndex));
-                _extractedTextByPage[CurrentPageIndex] = textElements;
+                sourcePageIndex = PageThumbnails[CurrentPageIndex].OriginalPageIndex;
             }
 
-            if (!_extractedImagesByPage.ContainsKey(CurrentPageIndex))
+            bool needsTextExtraction = !_extractedTextByPage.ContainsKey(CurrentPageIndex);
+            bool needsImageExtraction = !_extractedImagesByPage.ContainsKey(CurrentPageIndex);
+            string? snapshotPath = null;
+            try
             {
-                var imageElements = await Task.Run(() =>
-                    _contentExtractionService.ExtractImagesFromPage(CurrentPageIndex));
-                _extractedImagesByPage[CurrentPageIndex] = imageElements;
+                if (needsTextExtraction || needsImageExtraction)
+                {
+                    var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+                    snapshotPath = await CreateWorkingSnapshotAsync(pdfService);
+                    var extractionService = new ContentExtractionService(snapshotPath);
+
+                    if (needsTextExtraction)
+                    {
+                        var textElements = await Task.Run(() =>
+                            extractionService.ExtractTextFromPage(sourcePageIndex));
+                        foreach (var element in textElements)
+                        {
+                            element.PageNumber = CurrentPageIndex;
+                        }
+                        _extractedTextByPage[CurrentPageIndex] = textElements;
+                    }
+
+                    if (needsImageExtraction)
+                    {
+                        var imageElements = await Task.Run(() =>
+                            extractionService.ExtractImagesFromPage(sourcePageIndex));
+                        foreach (var element in imageElements)
+                        {
+                            element.PageNumber = CurrentPageIndex;
+                        }
+                        _extractedImagesByPage[CurrentPageIndex] = imageElements;
+                    }
+                }
+            }
+            finally
+            {
+                TryDeleteTemporaryFile(snapshotPath);
             }
 
             // Update UI collections
@@ -137,6 +164,7 @@ public partial class MainViewModel
         if (item == null) return;
 
         item.IsDeleted = true;
+        MarkDocumentDirty();
 
         // Update the underlying element
         if (_extractedTextByPage.TryGetValue(item.PageNumber, out var elements))
@@ -158,6 +186,7 @@ public partial class MainViewModel
         if (item == null) return;
 
         item.IsDeleted = true;
+        MarkDocumentDirty();
 
         // Update the underlying element
         if (_extractedImagesByPage.TryGetValue(item.PageNumber, out var elements))
@@ -180,6 +209,7 @@ public partial class MainViewModel
 
         item.IsDeleted = false;
         item.IsModified = false;
+        MarkDocumentDirty();
 
         // Restore original position
         if (_extractedTextByPage.TryGetValue(item.PageNumber, out var elements))
@@ -214,6 +244,7 @@ public partial class MainViewModel
 
         item.IsDeleted = false;
         item.IsModified = false;
+        MarkDocumentDirty();
 
         // Restore original position and size
         if (_extractedImagesByPage.TryGetValue(item.PageNumber, out var elements))
@@ -276,6 +307,7 @@ public partial class MainViewModel
         item.X = newX;
         item.Y = newY;
         item.IsModified = true;
+        MarkDocumentDirty();
 
         // Update underlying element
         if (_extractedTextByPage.TryGetValue(item.PageNumber, out var elements))
@@ -301,6 +333,7 @@ public partial class MainViewModel
         item.X = newX;
         item.Y = newY;
         item.IsModified = true;
+        MarkDocumentDirty();
 
         // Update underlying element
         if (_extractedImagesByPage.TryGetValue(item.PageNumber, out var elements))
@@ -326,6 +359,7 @@ public partial class MainViewModel
         item.Width = newWidth;
         item.Height = newHeight;
         item.IsModified = true;
+        MarkDocumentDirty();
 
         // Update underlying element
         if (_extractedImagesByPage.TryGetValue(item.PageNumber, out var elements))
@@ -351,8 +385,8 @@ public partial class MainViewModel
             return false;
         }
 
-        double displayWidth = imageItem.Width * ZoomScale;
-        double displayHeight = imageItem.Height * ZoomScale;
+        double displayWidth = PageCoordinateMapper.PdfPointsToDips(imageItem.Width, ZoomScale);
+        double displayHeight = PageCoordinateMapper.PdfPointsToDips(imageItem.Height, ZoomScale);
 
         if (displayWidth <= 0 || displayHeight <= 0)
         {
@@ -382,10 +416,11 @@ public partial class MainViewModel
                 return false;
             }
 
-            double newWidth = normalized.Width / ZoomScale;
-            double newHeight = normalized.Height / ZoomScale;
-            double newX = imageItem.X + normalized.X / ZoomScale;
-            double newY = imageItem.Y + imageItem.Height - (normalized.Y / ZoomScale) - newHeight;
+            double newWidth = PageCoordinateMapper.DipsToPdfPoints(normalized.Width, ZoomScale);
+            double newHeight = PageCoordinateMapper.DipsToPdfPoints(normalized.Height, ZoomScale);
+            double newX = imageItem.X + PageCoordinateMapper.DipsToPdfPoints(normalized.X, ZoomScale);
+            double newY = imageItem.Y + imageItem.Height -
+                PageCoordinateMapper.DipsToPdfPoints(normalized.Y, ZoomScale) - newHeight;
 
             imageItem.X = newX;
             imageItem.Y = newY;
@@ -394,6 +429,7 @@ public partial class MainViewModel
             imageItem.ImageBytes = croppedBytes;
             imageItem.Format = "png";
             imageItem.IsModified = true;
+            MarkDocumentDirty();
 
             if (_extractedImagesByPage.TryGetValue(imageItem.PageNumber, out var elements))
             {
@@ -507,7 +543,6 @@ public partial class MainViewModel
     /// </summary>
     private void ResetContentExtractionOnFileChange()
     {
-        _contentExtractionService = null;
         _extractedTextByPage.Clear();
         _extractedImagesByPage.Clear();
         ExtractedTextItems.Clear();
@@ -523,7 +558,6 @@ public partial class MainViewModel
     /// </summary>
     private void ClearBakedContentModifications()
     {
-        _contentExtractionService = null;
         _extractedTextByPage.Clear();
         _extractedImagesByPage.Clear();
         ExtractedTextItems.Clear();

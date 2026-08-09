@@ -37,6 +37,11 @@ public interface IPdfService
     (float width, float height) GetPageDimensions(int pageNumber);
 
     /// <summary>
+    /// Get the inherent clockwise page rotation stored in the PDF.
+    /// </summary>
+    int GetPageInherentRotation(int pageNumber);
+
+    /// <summary>
     /// Add text to a page
     /// </summary>
     void AddText(TextAnnotation annotation);
@@ -88,6 +93,12 @@ public interface IPdfService
     Task<bool> ReloadBytesFromFileAsync(string filePath);
 
     /// <summary>
+    /// Export the currently loaded PDF bytes without changing the active document path.
+    /// Pending UI edits must be baked before calling this method.
+    /// </summary>
+    Task<bool> ExportWorkingCopyAsync(string filePath);
+
+    /// <summary>
     /// Merge multiple PDFs
     /// </summary>
     Task<bool> MergePdfsAsync(string[] inputFiles, string outputFile);
@@ -101,7 +112,7 @@ public interface IPdfService
     /// <summary>
     /// Split PDF into individual pages
     /// </summary>
-    Task<bool> SplitPdfAsync(string inputFile, string outputFolder);
+    Task<bool> SplitPdfAsync(string inputFile, string outputFolder, string? outputBaseName = null);
 
     /// <summary>
     /// Extract specific pages from PDF

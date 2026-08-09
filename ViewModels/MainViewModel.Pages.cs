@@ -22,6 +22,14 @@ namespace OpenJPDF.ViewModels;
 /// </summary>
 public partial class MainViewModel
 {
+    partial void OnHasPageOrderChangedChanged(bool value)
+    {
+        if (value)
+        {
+            MarkDocumentDirty();
+        }
+    }
+
     #region Performance Optimization
     
     /// <summary>
@@ -753,6 +761,7 @@ public partial class MainViewModel
         SyncPageRotationsToService();
         LoadCurrentPage();
         RefreshThumbnailRotation(CurrentPageIndex);
+        MarkDocumentDirty();
 
         StatusMessage = $"Page rotated to {newRotation}°. Save to apply changes permanently.";
     }
@@ -770,6 +779,7 @@ public partial class MainViewModel
         SyncPageRotationsToService();
         LoadCurrentPage();
         RefreshThumbnailRotation(CurrentPageIndex);
+        MarkDocumentDirty();
 
         StatusMessage = $"Page rotated to {newRotation}°. Save to apply changes permanently.";
     }
@@ -809,8 +819,8 @@ public partial class MainViewModel
         if (!IsFileLoaded || pageIndex < 0 || pageIndex >= TotalPages) return;
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-        int rotation = GetPageRotation(pageIndex);
         int originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
+        int rotation = GetPageRotation(pageIndex);
 
         await Task.Run(() =>
         {
@@ -843,7 +853,7 @@ public partial class MainViewModel
             ? PageThumbnails[pageIndex].OriginalPageIndex
             : pageIndex;
         var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(originalPageIndex);
-        int rotation = GetPageRotation(pageIndex);
+        int rotation = pdfService.GetPageInherentRotation(originalPageIndex) + GetPageRotation(pageIndex);
         if (((rotation % 360) + 360) % 360 is 90 or 270)
         {
             (pageWidthPts, pageHeightPts) = (pageHeightPts, pageWidthPts);

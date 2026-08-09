@@ -6,6 +6,7 @@
 
 using CommunityToolkit.Mvvm.Input;
 using OpenJPDF.Models;
+using System.IO;
 using WinForms = System.Windows.Forms;
 using MessageBox = System.Windows.MessageBox;
 using MessageBoxButton = System.Windows.MessageBoxButton;
@@ -135,20 +136,49 @@ public partial class MainViewModel
         if (dialog.ShowDialog() == WinForms.DialogResult.OK)
         {
             var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-            
-            StatusMessage = "Splitting PDF...";
-            bool success = await pdfService.SplitPdfAsync(FilePath!, dialog.SelectedPath);
+            string? snapshotPath = null;
 
-            if (success)
+            try
             {
-                StatusMessage = "PDF split successfully";
-                MessageBox.Show($"PDF split successfully!\n\nPages saved to: {dialog.SelectedPath}", 
-                    "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                StatusMessage = "Preparing current edits...";
+                bool bakedWorkingCopy = await BakePendingEditsIntoWorkingPdfAsync(pdfService);
+                snapshotPath = await CreateWorkingSnapshotAsync(pdfService);
+
+                StatusMessage = "Splitting PDF...";
+                bool success = await pdfService.SplitPdfAsync(
+                    snapshotPath,
+                    dialog.SelectedPath,
+                    Path.GetFileNameWithoutExtension(FilePath));
+
+                if (bakedWorkingCopy)
+                {
+                    await RefreshDocumentAfterServiceChangeAsync(
+                        pdfService,
+                        CurrentPageIndex,
+                        hasUnsavedChanges: true);
+                }
+
+                if (success)
+                {
+                    StatusMessage = "PDF split successfully";
+                    MessageBox.Show($"PDF split successfully!\n\nPages saved to: {dialog.SelectedPath}",
+                        "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    StatusMessage = "Split failed";
+                    MessageBox.Show("Failed to split PDF file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                StatusMessage = "Split failed";
-                MessageBox.Show("Failed to split PDF file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StatusMessage = $"Split failed: {ex.Message}";
+                MessageBox.Show($"Failed to split PDF file:\n{ex.Message}",
+                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                TryDeleteTemporaryFile(snapshotPath);
             }
         }
     }
@@ -174,15 +204,35 @@ public partial class MainViewModel
             if (saveDialog.ShowDialog() == true)
             {
                 var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+                string? snapshotPath = null;
 
                 // Convert 0-based indices to 1-based page numbers
                 var pageNumbers = dialog.SelectedPages.Select(idx => idx + 1).ToArray();
 
-                StatusMessage = "Extracting pages...";
-                bool success = await pdfService.ExtractPagesAsync(FilePath!, pageNumbers, saveDialog.FileName);
-
-                if (success)
+                try
                 {
+                    StatusMessage = "Preparing current edits...";
+                    bool bakedWorkingCopy = await BakePendingEditsIntoWorkingPdfAsync(pdfService);
+                    snapshotPath = await CreateWorkingSnapshotAsync(pdfService);
+
+                    StatusMessage = "Extracting pages...";
+                    bool success = await pdfService.ExtractPagesAsync(snapshotPath, pageNumbers, saveDialog.FileName);
+
+                    if (bakedWorkingCopy)
+                    {
+                        await RefreshDocumentAfterServiceChangeAsync(
+                            pdfService,
+                            CurrentPageIndex,
+                            hasUnsavedChanges: true);
+                    }
+
+                    if (!success)
+                    {
+                        StatusMessage = "Extraction failed";
+                        MessageBox.Show("Failed to extract pages.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        return;
+                    }
+
                     StatusMessage = "Pages extracted successfully";
 
                     // Open the extracted file automatically
@@ -191,12 +241,33 @@ public partial class MainViewModel
                     MessageBox.Show($"Pages extracted successfully!\n\nSaved to: {saveDialog.FileName}",
                         "Success", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
-                else
+                catch (Exception ex)
                 {
-                    StatusMessage = "Extraction failed";
-                    MessageBox.Show("Failed to extract pages.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    StatusMessage = $"Extraction failed: {ex.Message}";
+                    MessageBox.Show($"Failed to extract pages:\n{ex.Message}",
+                        "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                finally
+                {
+                    TryDeleteTemporaryFile(snapshotPath);
                 }
             }
+        }
+    }
+
+    private static void TryDeleteTemporaryFile(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return;
+
+        try
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+        catch
+        {
+            // Best-effort cleanup only; snapshot files are stored in the OS temp folder.
         }
     }
 
@@ -305,7 +376,7 @@ public partial class MainViewModel
         var newThumbnail = new PageThumbnail
         {
             PageNumber = sourceIndex + 2,
-            OriginalPageIndex = sourceIndex,
+            OriginalPageIndex = sourceThumbnail.OriginalPageIndex,
             Thumbnail = sourceThumbnail.Thumbnail
         };
         
@@ -320,6 +391,14 @@ public partial class MainViewModel
         var sourcePageImage = sourceIndex < pageImages.Count ? pageImages[sourceIndex].Image : null;
         var newPageImage = new PageImage(sourceIndex + 1, sourcePageImage);
         pageImages.Insert(sourceIndex + 1, newPageImage);
+        if (ActiveDocument != null)
+        {
+            UpdatePageImageDisplaySize(ActiveDocument, newPageImage, sourceIndex + 1);
+        }
+        else
+        {
+            UpdatePageImageDisplaySize(newPageImage, sourceIndex + 1);
+        }
         
         // Update page indices in PageImages collection
         for (int i = sourceIndex + 2; i < pageImages.Count; i++)

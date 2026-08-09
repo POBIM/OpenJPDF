@@ -14,6 +14,7 @@ using System.Windows.Shapes;
 using OpenJPDF.Models;
 using OpenJPDF.Services;
 using OpenJPDF.ViewModels;
+using OpenJPDF.Helpers;
 using WpfImage = System.Windows.Controls.Image;
 using WpfColor = System.Windows.Media.Color;
 using WpfFontFamily = System.Windows.Media.FontFamily;
@@ -107,6 +108,7 @@ public partial class MainWindow : Window
         // Subscribe to clear annotations event
         Loaded += MainWindow_Loaded;
         Unloaded += MainWindow_Unloaded;
+        Closing += MainWindow_Closing;
 
         // Initialize OCR engine
         InitializeOcr();
@@ -344,6 +346,23 @@ public partial class MainWindow : Window
         }
         _resizeHandlesManager?.HideHandles();
         CancelImagePreview();
+    }
+
+    private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (DataContext is not MainViewModel { HasUnsavedDocuments: true })
+            return;
+
+        var result = System.Windows.MessageBox.Show(
+            "There are unsaved PDF changes. Exit without saving?",
+            "Unsaved Changes",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            e.Cancel = true;
+        }
     }
 
     /// <summary>
@@ -819,8 +838,8 @@ public partial class MainWindow : Window
             using var bitmap = new System.Drawing.Bitmap(stream);
 
             // Define region (convert from screen coordinates)
-            var region = new System.Drawing.Rectangle(
-                (int)x, (int)y, (int)width, (int)height);
+            var region = PageCoordinateMapper.DipsToBitmapRectangle(
+                bitmapSource, x, y, width, height);
 
             // Perform OCR
             string text = await Task.Run(() => _ocrService.RecognizeTextInRegion(bitmap, region));
@@ -1029,11 +1048,13 @@ public partial class MainWindow : Window
 
             using var fullBitmap = new System.Drawing.Bitmap(stream);
 
-            // Clamp region to image bounds
-            int cropX = Math.Max(0, (int)x);
-            int cropY = Math.Max(0, (int)y);
-            int cropWidth = Math.Min((int)width, fullBitmap.Width - cropX);
-            int cropHeight = Math.Min((int)height, fullBitmap.Height - cropY);
+            // Convert WPF DIPs to the actual raster pixels before cropping.
+            var mappedRegion = PageCoordinateMapper.DipsToBitmapRectangle(
+                bitmapSource, x, y, width, height);
+            int cropX = mappedRegion.X;
+            int cropY = mappedRegion.Y;
+            int cropWidth = mappedRegion.Width;
+            int cropHeight = mappedRegion.Height;
 
             if (cropWidth <= 0 || cropHeight <= 0)
             {
@@ -2832,6 +2853,10 @@ public partial class MainWindow : Window
         {
             RenderExtractedContent(vm);
         }
+
+        // Annotation refreshes clear the shared canvas, so measurements must be
+        // restored as part of the same visual refresh transaction.
+        RefreshMeasurementsOnCanvas();
     }
 
     /// <summary>
@@ -2852,7 +2877,8 @@ public partial class MainWindow : Window
     /// </summary>
     private void RenderExtractedContent(MainViewModel vm)
     {
-        var zoomScale = vm.ZoomScale;
+        var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
+        int pageRotation = vm.GetCurrentPageEffectiveRotation();
 
         // Render extracted text items
         foreach (var textItem in vm.ExtractedTextItems)
@@ -2887,22 +2913,18 @@ public partial class MainWindow : Window
                 }
             };
 
-            // Calculate position (PDF Y is from bottom, WPF Y is from top)
-            double screenX = textItem.X * zoomScale;
-            double screenY = textItem.Y * zoomScale;
+            var displayRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+                textItem.X, textItem.Y, textItem.Width, textItem.Height,
+                pageWidth, pageHeight, pageRotation, vm.ZoomScale);
 
-            // Get page height to flip Y coordinate
-            var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-            screenY = (pageHeight - textItem.Y - textItem.Height) * zoomScale;
-
-            border.Width = textItem.Width * zoomScale;
-            border.Height = textItem.Height * zoomScale;
+            border.Width = displayRect.Width;
+            border.Height = displayRect.Height;
 
             // Add text preview
             var textBlock = new TextBlock
             {
                 Text = textItem.Text.Length > 50 ? textItem.Text[..50] + "..." : textItem.Text,
-                FontSize = Math.Max(8, textItem.FontSize * zoomScale * 0.5),
+                FontSize = Math.Max(8, PageCoordinateMapper.PdfPointsToDips(textItem.FontSize, vm.ZoomScale)),
                 Foreground = WpfBrushes.DarkBlue,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -2911,8 +2933,8 @@ public partial class MainWindow : Window
             };
             border.Child = textBlock;
 
-            Canvas.SetLeft(border, screenX);
-            Canvas.SetTop(border, screenY);
+            Canvas.SetLeft(border, displayRect.X);
+            Canvas.SetTop(border, displayRect.Y);
 
             // Add context menu for extracted text
             border.ContextMenu = CreateExtractedTextContextMenu(textItem);
@@ -2942,13 +2964,12 @@ public partial class MainWindow : Window
                 Tag = imageItem
             };
 
-            // Calculate position
-            double screenX = imageItem.X * zoomScale;
-            var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-            double screenY = (pageHeight - imageItem.Y - imageItem.Height) * zoomScale;
+            var displayRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+                imageItem.X, imageItem.Y, imageItem.Width, imageItem.Height,
+                pageWidth, pageHeight, pageRotation, vm.ZoomScale);
 
-            border.Width = imageItem.Width * zoomScale;
-            border.Height = imageItem.Height * zoomScale;
+            border.Width = displayRect.Width;
+            border.Height = displayRect.Height;
 
             // Try to display a preview of the image
             if (imageItem.ImageBytes.Length > 0)
@@ -2985,8 +3006,8 @@ public partial class MainWindow : Window
                 }
             }
 
-            Canvas.SetLeft(border, screenX);
-            Canvas.SetTop(border, screenY);
+            Canvas.SetLeft(border, displayRect.X);
+            Canvas.SetTop(border, displayRect.Y);
 
             // Add context menu for extracted image
             border.ContextMenu = CreateExtractedImageContextMenu(imageItem);
@@ -3106,24 +3127,24 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
 
-        var (_, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-        const double PointsToDips = 96.0 / 72.0;
-        double annotationX = textItem.X * PointsToDips;
-        double annotationY = (pageHeight - textItem.Y - textItem.Height) * PointsToDips;
-        double annotationWidth = textItem.Width * PointsToDips;
-        double annotationHeight = textItem.Height * PointsToDips;
+        var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
+        var annotationRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+            textItem.X, textItem.Y, textItem.Width, textItem.Height,
+            pageWidth, pageHeight, vm.GetCurrentPageEffectiveRotation());
 
         // Create new text annotation from extracted text
         var annotation = new TextAnnotationItem
         {
             PageNumber = textItem.PageNumber,
-            X = annotationX,
-            Y = annotationY,
-            Width = annotationWidth,
-            Height = annotationHeight,
+            X = annotationRect.X,
+            Y = annotationRect.Y,
+            Width = annotationRect.Width,
+            Height = annotationRect.Height,
             Text = textItem.Text,
             FontFamily = !string.IsNullOrEmpty(textItem.FontName) ? textItem.FontName : "Arial",
-            FontSize = textItem.FontSize > 0 ? textItem.FontSize : 12f,
+            FontSize = textItem.FontSize > 0
+                ? (float)PageCoordinateMapper.PdfPointsToDips(textItem.FontSize)
+                : 16f,
             Color = textItem.Color ?? "#000000"
         };
 
@@ -3158,21 +3179,19 @@ public partial class MainWindow : Window
             // PERFORMANCE FIX: Use async I/O
             await Task.Run(() => System.IO.File.WriteAllBytes(tempPath, imageItem.ImageBytes));
 
-            var (_, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-            const double PointsToDips = 96.0 / 72.0;
-            double annotationX = imageItem.X * PointsToDips;
-            double annotationY = (pageHeight - imageItem.Y - imageItem.Height) * PointsToDips;
-            double annotationWidth = imageItem.Width * PointsToDips;
-            double annotationHeight = imageItem.Height * PointsToDips;
+            var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
+            var annotationRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+                imageItem.X, imageItem.Y, imageItem.Width, imageItem.Height,
+                pageWidth, pageHeight, vm.GetCurrentPageEffectiveRotation());
 
             // Create new image annotation from extracted image
             var annotation = new ImageAnnotationItem
             {
                 PageNumber = imageItem.PageNumber,
-                X = annotationX,
-                Y = annotationY,
-                Width = annotationWidth,
-                Height = annotationHeight,
+                X = annotationRect.X,
+                Y = annotationRect.Y,
+                Width = annotationRect.Width,
+                Height = annotationRect.Height,
                 ImagePath = tempPath
             };
 
@@ -3508,14 +3527,13 @@ public partial class MainWindow : Window
             // Clean up text
             text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
 
-            // Compute screen coords for the extracted image (same as RenderExtractedContent)
             var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-            double screenX = imageItem.X * vm.ZoomScale;
-            double screenY = (pageHeight - imageItem.Y - imageItem.Height) * vm.ZoomScale;
-            double screenWidth = imageItem.Width * vm.ZoomScale;
-            double screenHeight = imageItem.Height * vm.ZoomScale;
+            var displayRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+                imageItem.X, imageItem.Y, imageItem.Width, imageItem.Height,
+                pageWidth, pageHeight, vm.GetCurrentPageEffectiveRotation(), vm.ZoomScale);
 
-            vm.CreateTextFromOcr(text, screenX, screenY, screenWidth, screenHeight, AddAnnotationPreview);
+            vm.CreateTextFromOcr(
+                text, displayRect.X, displayRect.Y, displayRect.Width, displayRect.Height, AddAnnotationPreview);
         }
         catch (Exception ex)
         {
@@ -3573,28 +3591,31 @@ public partial class MainWindow : Window
         var currentPos = e.GetPosition(AnnotationCanvas);
         var delta = currentPos - _extractedDragStart;
 
-        // Convert delta from screen to PDF coordinates
-        double deltaXPdf = delta.X / vm.ZoomScale;
-        double deltaYPdf = -delta.Y / vm.ZoomScale; // Flip Y for PDF coords
+        var (deltaXPdf, deltaYPdf) = PageCoordinateMapper.DisplayDipsDeltaToPdfPoints(
+            delta.X, delta.Y, vm.GetCurrentPageEffectiveRotation(), vm.ZoomScale);
+        var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
 
         if (_draggedExtractedText != null)
         {
             double newX = _extractedOriginalX + deltaXPdf;
             double newY = _extractedOriginalY + deltaYPdf;
 
-            // Update position on screen
-            var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-            Canvas.SetLeft(border, newX * vm.ZoomScale);
-            Canvas.SetTop(border, (pageHeight - newY - _draggedExtractedText.Height) * vm.ZoomScale);
+            var displayRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+                newX, newY, _draggedExtractedText.Width, _draggedExtractedText.Height,
+                pageWidth, pageHeight, vm.GetCurrentPageEffectiveRotation(), vm.ZoomScale);
+            Canvas.SetLeft(border, displayRect.X);
+            Canvas.SetTop(border, displayRect.Y);
         }
         else if (_draggedExtractedImage != null)
         {
             double newX = _extractedOriginalX + deltaXPdf;
             double newY = _extractedOriginalY + deltaYPdf;
 
-            var (pageWidth, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
-            Canvas.SetLeft(border, newX * vm.ZoomScale);
-            Canvas.SetTop(border, (pageHeight - newY - _draggedExtractedImage.Height) * vm.ZoomScale);
+            var displayRect = PageCoordinateMapper.PdfRectangleToDisplayDips(
+                newX, newY, _draggedExtractedImage.Width, _draggedExtractedImage.Height,
+                pageWidth, pageHeight, vm.GetCurrentPageEffectiveRotation(), vm.ZoomScale);
+            Canvas.SetLeft(border, displayRect.X);
+            Canvas.SetTop(border, displayRect.Y);
         }
 
         e.Handled = true;
@@ -3612,8 +3633,8 @@ public partial class MainWindow : Window
         // Only update if actually moved
         if (Math.Abs(delta.X) > 2 || Math.Abs(delta.Y) > 2)
         {
-            double deltaXPdf = delta.X / vm.ZoomScale;
-            double deltaYPdf = -delta.Y / vm.ZoomScale;
+            var (deltaXPdf, deltaYPdf) = PageCoordinateMapper.DisplayDipsDeltaToPdfPoints(
+                delta.X, delta.Y, vm.GetCurrentPageEffectiveRotation(), vm.ZoomScale);
 
             if (_draggedExtractedText != null)
             {
@@ -3656,22 +3677,22 @@ public partial class MainWindow : Window
 
         var data = preview;
 
-        // Get the actual rendered image dimensions (in pixels)
+        // Use the displayed WPF size in DIPs. Bitmap PixelWidth is deliberately
+        // larger than the display size for high-quality rendering.
         if (PdfImage.Source == null) return;
         
-        double imageWidthPx = PdfImage.Source is System.Windows.Media.Imaging.BitmapSource bmp 
-            ? bmp.PixelWidth 
-            : PdfImage.ActualWidth;
-        double imageHeightPx = PdfImage.Source is System.Windows.Media.Imaging.BitmapSource bmpH 
-            ? bmpH.PixelHeight 
-            : PdfImage.ActualHeight;
+        double imageWidthPx = PdfImage.ActualWidth > 0
+            ? PdfImage.ActualWidth
+            : PdfImage.Source.Width;
+        double imageHeightPx = PdfImage.ActualHeight > 0
+            ? PdfImage.ActualHeight
+            : PdfImage.Source.Height;
 
         // Match the bitmap currently shown on screen; pending 90/270 page rotation swaps dimensions.
         var (pageWidthPts, pageHeightPts) = vm.GetCurrentPageDisplayDimensionsInPoints();
         if (pageWidthPts <= 0 || pageHeightPts <= 0) return;
 
-        // Calculate actual conversion factor: pixels per point
-        // This accounts for any DPI and makes preview match saved PDF exactly
+        // Calculate displayed DIPs per PDF point.
         double pixelsPerPointX = imageWidthPx / pageWidthPts;
         double pixelsPerPointY = imageHeightPx / pageHeightPts;
         
@@ -3974,16 +3995,16 @@ public partial class MainWindow : Window
     private double GetPixelsPerPoint()
     {
         if (DataContext is not MainViewModel vm) return 1.0;
-        if (PdfImage.Source == null) return vm.ZoomScale;
-        
-        double imageWidthPx = PdfImage.Source is System.Windows.Media.Imaging.BitmapSource bmp 
-            ? bmp.PixelWidth 
-            : PdfImage.ActualWidth;
+        if (PdfImage.Source == null) return PageCoordinateMapper.PointsToDips * vm.ZoomScale;
+
+        double imageWidthDips = PdfImage.ActualWidth > 0
+            ? PdfImage.ActualWidth
+            : PdfImage.Source.Width;
 
         var (pageWidthPts, _) = vm.GetCurrentPageDisplayDimensionsInPoints();
-        if (pageWidthPts <= 0) return vm.ZoomScale;
+        if (pageWidthPts <= 0) return PageCoordinateMapper.PointsToDips * vm.ZoomScale;
 
-        return imageWidthPx / pageWidthPts;
+        return imageWidthDips / pageWidthPts;
     }
 
     #endregion

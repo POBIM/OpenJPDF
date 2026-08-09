@@ -39,6 +39,13 @@ public partial class PageImage : ObservableObject
     public void UpdateImage(BitmapSource? newImage)
     {
         Image = newImage;
+        if (newImage != null)
+        {
+            // BitmapSource.Width/Height are WPF DIPs and already include the
+            // renderer's crop box, inherent PDF rotation, and requested zoom.
+            DisplayWidth = Math.Max(1, newImage.Width);
+            DisplayHeight = Math.Max(1, newImage.Height);
+        }
     }
 
     public void UpdateDisplaySize(float pageWidthPoints, float pageHeightPoints, double zoomScale)

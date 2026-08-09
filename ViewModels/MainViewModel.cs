@@ -5,11 +5,14 @@
 // See LICENSE file for full license details.
 
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using OpenJPDF.Helpers;
 using OpenJPDF.Models;
 using OpenJPDF.Services;
 using Cursor = System.Windows.Input.Cursor;
@@ -96,6 +99,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Flag to prevent re-loading page during document sync
     /// </summary>
     private bool _isSyncingDocument;
+    private ObservableCollection<AnnotationItem>? _trackedAnnotations;
+    private int _renderGeneration;
 
     #endregion
 
@@ -142,7 +147,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public string WindowTitle => string.IsNullOrEmpty(FilePath) 
         ? "OpenJPDF - PDF Editor" 
-        : $"OpenJPDF - {Path.GetFileName(FilePath)}";
+        : $"OpenJPDF - {(ActiveDocument?.HasUnsavedChanges == true ? "* " : "")}{Path.GetFileName(FilePath)}";
 
     [ObservableProperty]
     private int currentPageNumber = 1;
@@ -496,6 +501,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         
         // Subscribe to undo/redo state changes
         _undoRedoManager.StateChanged += OnUndoRedoStateChanged;
+        AttachAnnotationDirtyTracking(Annotations);
     }
 
     #endregion
@@ -514,6 +520,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void Undo()
     {
         _undoRedoManager.Undo();
+        MarkDocumentDirty();
         RefreshAnnotationsRequested?.Invoke();
         StatusMessage = UndoDescription != null ? $"Undone: {UndoDescription}" : "Undo";
     }
@@ -522,6 +529,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void Redo()
     {
         _undoRedoManager.Redo();
+        MarkDocumentDirty();
         RefreshAnnotationsRequested?.Invoke();
         StatusMessage = RedoDescription != null ? $"Redone: {RedoDescription}" : "Redo";
     }
@@ -532,6 +540,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void RecordUndoableAction(IUndoableAction action)
     {
         _undoRedoManager.RecordAction(action);
+        MarkDocumentDirty();
     }
 
     /// <summary>
@@ -859,6 +868,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     ActiveDocument.HeaderFooterConfig = HeaderFooterConfig;
                 }
                 OnPropertyChanged(nameof(HasHeaderFooter));
+                MarkDocumentDirty();
                 RefreshHeaderFooterPreview?.Invoke();
                 
                 // Refresh all thumbnails to show H/F elements
@@ -895,6 +905,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         OnPropertyChanged(nameof(HasHeaderFooter));
         OnPropertyChanged(nameof(IsEditingHeaderFooter));
+        MarkDocumentDirty();
         RefreshHeaderFooterPreview?.Invoke();
         RefreshAnnotationsRequested?.Invoke();
         
@@ -1164,12 +1175,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public (float Width, float Height) GetCurrentPageDisplayDimensionsInPoints()
     {
+        if (CurrentPageImage != null && ZoomScale > 0)
+        {
+            return (
+                (float)PageCoordinateMapper.DipsToPdfPoints(CurrentPageImage.Width / ZoomScale),
+                (float)PageCoordinateMapper.DipsToPdfPoints(CurrentPageImage.Height / ZoomScale));
+        }
+
         var (width, height) = GetCurrentPageDimensionsInPoints();
-        int rotation = ((CurrentPageRotation % 360) + 360) % 360;
+        int rotation = GetCurrentPageEffectiveRotation();
 
         return rotation is 90 or 270
             ? (height, width)
             : (width, height);
+    }
+
+    public int GetCurrentPageEffectiveRotation()
+    {
+        if (!IsFileLoaded)
+            return 0;
+
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        int originalPageIndex = CurrentPageIndex;
+        if (CurrentPageIndex >= 0 && CurrentPageIndex < PageThumbnails.Count)
+        {
+            originalPageIndex = PageThumbnails[CurrentPageIndex].OriginalPageIndex;
+        }
+
+        int rotation = pdfService.GetPageInherentRotation(originalPageIndex) + CurrentPageRotation;
+        rotation %= 360;
+        return rotation < 0 ? rotation + 360 : rotation;
     }
 
     #endregion

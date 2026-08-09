@@ -208,6 +208,7 @@ public partial class MainViewModel
     /// </summary>
     private async Task LoadAllPagesForTab(DocumentTab tab)
     {
+        int renderGeneration = Interlocked.Increment(ref _renderGeneration);
         tab.PageImages.Clear();
         
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -231,7 +232,8 @@ public partial class MainViewModel
         System.Diagnostics.Debug.WriteLine($"[PERF] Created {tab.TotalPages} page placeholders in {sw.ElapsedMilliseconds}ms");
 
         // Phase 2: Load only the current page and nearby pages
-        await LoadVisiblePagesAsync(tab, tab.CurrentPageIndex, windowSize: 12);
+        int windowSize = GetRenderWindowSize(tab.ZoomScale, IsScrollablePageView);
+        await LoadVisiblePagesAsync(tab, tab.CurrentPageIndex, windowSize, renderGeneration);
         
         System.Diagnostics.Debug.WriteLine($"[PERF] Initial page load completed in {sw.ElapsedMilliseconds}ms");
     }
@@ -239,8 +241,13 @@ public partial class MainViewModel
     /// <summary>
     /// Load pages around the specified center page (lazy loading).
     /// </summary>
-    private async Task LoadVisiblePagesAsync(DocumentTab tab, int centerPage, int windowSize = 2)
+    private async Task LoadVisiblePagesAsync(
+        DocumentTab tab,
+        int centerPage,
+        int windowSize = 2,
+        int? expectedRenderGeneration = null)
     {
+        int renderGeneration = expectedRenderGeneration ?? Volatile.Read(ref _renderGeneration);
         float scale = (float)tab.ZoomScale;
         
         int startPage = Math.Max(0, centerPage - windowSize);
@@ -250,6 +257,9 @@ public partial class MainViewModel
         {
             for (int i = startPage; i <= endPage; i++)
             {
+                if (renderGeneration != Volatile.Read(ref _renderGeneration))
+                    return;
+
                 // Skip if already loaded
                 if (i < tab.PageImages.Count && tab.PageImages[i].Image != null)
                     continue;
@@ -267,10 +277,14 @@ public partial class MainViewModel
                 int rotation = tab.GetPageRotation(i);
                 var image = tab.PdfService.GetPageImage(originalPageIndex, scale, rotation);
                 var pageIdx = i;
+
+                if (renderGeneration != Volatile.Read(ref _renderGeneration))
+                    return;
                 
                 Application.Current?.Dispatcher.Invoke(() =>
                 {
-                    if (pageIdx < tab.PageImages.Count)
+                    if (renderGeneration == Volatile.Read(ref _renderGeneration) &&
+                        pageIdx < tab.PageImages.Count)
                     {
                         UpdatePageImageDisplaySize(tab, tab.PageImages[pageIdx], pageIdx);
                         tab.PageImages[pageIdx].UpdateImage(image);
@@ -284,6 +298,35 @@ public partial class MainViewModel
                 });
             }
         });
+
+        if (renderGeneration == Volatile.Read(ref _renderGeneration))
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+                UnloadDistantPageImages(tab, centerPage, windowSize + 2));
+        }
+    }
+
+    private static int GetRenderWindowSize(double zoomScale, bool isContinuous)
+    {
+        if (zoomScale >= 1.75)
+            return 1;
+        if (zoomScale >= 1.25)
+            return isContinuous ? 2 : 1;
+        return isContinuous ? 3 : 2;
+    }
+
+    private static void UnloadDistantPageImages(DocumentTab tab, int centerPage, int retainRadius)
+    {
+        int start = Math.Max(0, centerPage - retainRadius);
+        int end = Math.Min(tab.PageImages.Count - 1, centerPage + retainRadius);
+
+        for (int i = 0; i < tab.PageImages.Count; i++)
+        {
+            if (i < start || i > end)
+            {
+                tab.PageImages[i].UpdateImage(null);
+            }
+        }
     }
 
     /// <summary>
@@ -292,7 +335,8 @@ public partial class MainViewModel
     public async Task PreloadNearbyPagesAsync(int centerPage)
     {
         if (ActiveDocument == null) return;
-        await LoadVisiblePagesAsync(ActiveDocument, centerPage, windowSize: IsScrollablePageView ? 12 : 3);
+        int windowSize = GetRenderWindowSize(ActiveDocument.ZoomScale, IsScrollablePageView);
+        await LoadVisiblePagesAsync(ActiveDocument, centerPage, windowSize);
     }
 
     private void LoadCurrentPage()
@@ -337,6 +381,7 @@ public partial class MainViewModel
     /// </summary>
     private async Task LoadAllPagesAsync()
     {
+        int renderGeneration = Interlocked.Increment(ref _renderGeneration);
         PageImages.Clear();
         
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
@@ -372,7 +417,7 @@ public partial class MainViewModel
                 
                 Application.Current?.Dispatcher.Invoke(() =>
                 {
-                    if (PageImages.Count > 0)
+                    if (renderGeneration == Volatile.Read(ref _renderGeneration) && PageImages.Count > 0)
                     {
                         PageImages[0].UpdateImage(image);
                         CurrentPageImage = image;
@@ -384,7 +429,8 @@ public partial class MainViewModel
         // Phase 3: Preload nearby pages in background
         if (ActiveDocument != null)
         {
-            _ = LoadVisiblePagesAsync(ActiveDocument, 0, windowSize: 2);
+            int windowSize = GetRenderWindowSize(ActiveDocument.ZoomScale, IsScrollablePageView);
+            _ = LoadVisiblePagesAsync(ActiveDocument, 0, windowSize, renderGeneration);
         }
 
         sw.Stop();
@@ -399,6 +445,7 @@ public partial class MainViewModel
     {
         if (!IsFileLoaded) return;
 
+        int renderGeneration = Interlocked.Increment(ref _renderGeneration);
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         float scale = (float)ZoomScale;
         
@@ -418,38 +465,57 @@ public partial class MainViewModel
 
         // Reload current page and a wider window for multi-page view modes.
         int currentPage = CurrentPageIndex;
-        int windowSize = IsScrollablePageView ? 12 : 2;
+        int windowSize = GetRenderWindowSize(ZoomScale, IsScrollablePageView);
         int startPage = Math.Max(0, currentPage - windowSize);
         int endPage = Math.Min(PageImages.Count - 1, currentPage + windowSize);
 
+        var pagesToRender = new List<(int PageIndex, int OriginalPageIndex, int Rotation)>();
+        for (int pageIndex = startPage; pageIndex <= endPage; pageIndex++)
+        {
+            int originalPageIndex = pageIndex;
+            if (pageIndex < PageThumbnails.Count)
+            {
+                originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
+            }
+
+            pagesToRender.Add((pageIndex, originalPageIndex, GetPageRotation(pageIndex)));
+        }
+
         await Task.Run(() =>
         {
-            for (int i = startPage; i <= endPage; i++)
+            foreach (var page in pagesToRender)
             {
-                int pageIndex = i;
-                int rotation = GetPageRotation(pageIndex);
-                int originalPageIndex = pageIndex;
-                if (pageIndex >= 0 && pageIndex < PageThumbnails.Count)
-                {
-                    originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
-                }
+                if (renderGeneration != Volatile.Read(ref _renderGeneration))
+                    return;
 
-                var image = pdfService.GetPageImage(originalPageIndex, scale, rotation);
+                var image = pdfService.GetPageImage(page.OriginalPageIndex, scale, page.Rotation);
+
+                if (renderGeneration != Volatile.Read(ref _renderGeneration))
+                    return;
                 
                 Application.Current?.Dispatcher.Invoke(() =>
                 {
-                    if (pageIndex < PageImages.Count)
+                    if (renderGeneration == Volatile.Read(ref _renderGeneration) &&
+                        page.PageIndex < PageImages.Count)
                     {
-                        UpdatePageImageDisplaySize(PageImages[pageIndex], pageIndex);
-                        PageImages[pageIndex].UpdateImage(image);
+                        UpdatePageImageDisplaySize(PageImages[page.PageIndex], page.PageIndex);
+                        PageImages[page.PageIndex].UpdateImage(image);
                     }
                 });
             }
         });
 
+        if (renderGeneration != Volatile.Read(ref _renderGeneration))
+            return;
+
         if (CurrentPageIndex < PageImages.Count)
         {
             CurrentPageImage = PageImages[CurrentPageIndex].Image;
+        }
+
+        if (ActiveDocument != null)
+        {
+            UnloadDistantPageImages(ActiveDocument, currentPage, windowSize + 2);
         }
         
         System.Diagnostics.Debug.WriteLine($"[PERF] Reloaded {endPage - startPage + 1} pages after zoom change");
@@ -489,7 +555,7 @@ public partial class MainViewModel
         }
 
         var (width, height) = tab.PdfService.GetPageDimensions(originalPageIndex);
-        int rotation = tab.GetPageRotation(pageIndex);
+        int rotation = tab.PdfService.GetPageInherentRotation(originalPageIndex) + tab.GetPageRotation(pageIndex);
         if (((rotation % 360) + 360) % 360 is 90 or 270)
         {
             (width, height) = (height, width);
@@ -509,7 +575,7 @@ public partial class MainViewModel
         }
 
         var (width, height) = pdfService.GetPageDimensions(originalPageIndex);
-        int rotation = GetPageRotation(pageIndex);
+        int rotation = pdfService.GetPageInherentRotation(originalPageIndex) + GetPageRotation(pageIndex);
         if (((rotation % 360) + 360) % 360 is 90 or 270)
         {
             (width, height) = (height, width);
@@ -710,6 +776,7 @@ public partial class MainViewModel
         {
             ActiveDocument.TotalPages = pdfService.PageCount;
             ActiveDocument.HasUnsavedChanges = hasUnsavedChanges;
+            OnPropertyChanged(nameof(HasUnsavedDocuments));
             if (!hasUnsavedChanges)
             {
                 ActiveDocument.ClearPageRotations();
@@ -780,27 +847,49 @@ public partial class MainViewModel
         }
     }
 
-    private async Task BakePendingEditsIntoWorkingPdfAsync(IPdfService pdfService)
+    private async Task<bool> BakePendingEditsIntoWorkingPdfAsync(IPdfService pdfService)
     {
         bool hasPendingUiAnnotations = Annotations.Count > 0;
         bool hasPendingPageChanges = HasPageOrderChanged || _pageRotations.Count > 0;
         bool hasPendingContentChanges = HasPendingContentModifications();
+        bool hasPendingHeaderFooter = HasHeaderFooter && HeaderFooterConfig != null;
 
-        if (!hasPendingUiAnnotations && !hasPendingPageChanges && !hasPendingContentChanges)
-            return;
+        if (!hasPendingUiAnnotations && !hasPendingPageChanges &&
+            !hasPendingContentChanges && !hasPendingHeaderFooter)
+        {
+            return false;
+        }
 
         CommitHeaderFooterEditModeIfActive();
         ApplyContentModificationsToService(pdfService);
         SyncAnnotationsToService();
 
         string tempFile = Path.Combine(Path.GetTempPath(), $"OpenJPDF-working-{Guid.NewGuid():N}.pdf");
+        string? headerFooterTempFile = null;
         try
         {
             bool success = await pdfService.SaveAsync(tempFile);
             if (!success)
                 throw new InvalidOperationException("Failed to prepare current PDF edits before importing pages.");
 
-            await pdfService.ReloadBytesFromFileAsync(tempFile);
+            string reloadPath = tempFile;
+            if (hasPendingHeaderFooter && HeaderFooterConfig != null)
+            {
+                headerFooterTempFile = Path.Combine(
+                    Path.GetTempPath(), $"OpenJPDF-working-hf-{Guid.NewGuid():N}.pdf");
+                bool headerFooterSuccess = await pdfService.ApplyHeaderFooterAsync(
+                    tempFile,
+                    headerFooterTempFile,
+                    HeaderFooterConfig,
+                    Path.GetFileName(FilePath));
+                if (!headerFooterSuccess)
+                    throw new InvalidOperationException("Failed to prepare header/footer for the working PDF.");
+
+                reloadPath = headerFooterTempFile;
+                ClearBakedHeaderFooterConfig();
+            }
+
+            await pdfService.ReloadBytesFromFileAsync(reloadPath);
         }
         finally
         {
@@ -808,6 +897,16 @@ public partial class MainViewModel
             {
                 if (File.Exists(tempFile))
                     File.Delete(tempFile);
+            }
+            catch
+            {
+                // Best-effort cleanup only; service already has the PDF bytes in memory.
+            }
+
+            try
+            {
+                if (headerFooterTempFile != null && File.Exists(headerFooterTempFile))
+                    File.Delete(headerFooterTempFile);
             }
             catch
             {
@@ -821,6 +920,22 @@ public partial class MainViewModel
         ClearAnnotationsRequested?.Invoke();
         ClearPageRotations();
         HasPageOrderChanged = false;
+        ClearUndoHistory();
+        MarkDocumentDirty();
+        return true;
+    }
+
+    private static async Task<string> CreateWorkingSnapshotAsync(IPdfService pdfService)
+    {
+        string snapshotPath = Path.Combine(
+            Path.GetTempPath(), $"OpenJPDF-snapshot-{Guid.NewGuid():N}.pdf");
+
+        if (!await pdfService.ExportWorkingCopyAsync(snapshotPath))
+        {
+            throw new InvalidOperationException("Failed to create a current PDF snapshot.");
+        }
+
+        return snapshotPath;
     }
 
     private void ClearBakedHeaderFooterConfig()
@@ -873,18 +988,22 @@ public partial class MainViewModel
     #region Print Commands
 
     [RelayCommand]
-    private void Print()
+    private async Task Print()
     {
         if (!IsFileLoaded) return;
 
+        IPdfService? pdfService = null;
+        bool bakedWorkingCopy = false;
+        int pageIndexBeforePrint = CurrentPageIndex;
         try
         {
-            var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+            pdfService = ActiveDocument?.PdfService ?? _pdfService;
+            bakedWorkingCopy = await BakePendingEditsIntoWorkingPdfAsync(pdfService);
             int totalPages = pdfService.PageCount;
             
             // Build page order mapping so print uses reordered page sequence
             int[]? pageOrderMapping = null;
-            if (PageThumbnails.Count > 0)
+            if (!bakedWorkingCopy && PageThumbnails.Count > 0)
             {
                 pageOrderMapping = PageThumbnails.Select(t => t.OriginalPageIndex).ToArray();
             }
@@ -903,6 +1022,24 @@ public partial class MainViewModel
             StatusMessage = $"Print failed: {ex.Message}";
             System.Diagnostics.Debug.WriteLine($"Print error: {ex.Message}");
             MessageBox.Show($"Failed to open print dialog: {ex.Message}", "Print Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            if (bakedWorkingCopy && pdfService != null)
+            {
+                try
+                {
+                    await RefreshDocumentAfterServiceChangeAsync(
+                        pdfService,
+                        Math.Clamp(pageIndexBeforePrint, 0, Math.Max(0, pdfService.PageCount - 1)),
+                        hasUnsavedChanges: true);
+                    SyncToActiveDocument();
+                }
+                catch (Exception refreshEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Print refresh error: {refreshEx.Message}");
+                }
+            }
         }
     }
 

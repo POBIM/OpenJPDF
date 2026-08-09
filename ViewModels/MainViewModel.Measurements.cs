@@ -15,6 +15,42 @@ namespace OpenJPDF.ViewModels;
 /// </summary>
 public partial class MainViewModel
 {
+    partial void OnZoomScaleChanged(double oldValue, double newValue)
+    {
+        if (_isSyncingDocument || oldValue <= 0 || newValue <= 0 ||
+            Math.Abs(oldValue - newValue) < 0.0001)
+        {
+            return;
+        }
+
+        double ratio = newValue / oldValue;
+        foreach (var measurement in Measurements)
+        {
+            if (measurement is LineMeasurement line)
+            {
+                line.StartX *= ratio;
+                line.StartY *= ratio;
+                line.EndX *= ratio;
+                line.EndY *= ratio;
+            }
+            else if (measurement is AreaMeasurement area)
+            {
+                for (int i = 0; i < area.Points.Count; i++)
+                {
+                    var point = area.Points[i];
+                    area.Points[i] = new MeasurementPoint(point.X * ratio, point.Y * ratio);
+                }
+            }
+        }
+
+        if (MeasurementCalibration.ReferencePixelLength > 0)
+        {
+            MeasurementCalibration.ReferencePixelLength *= ratio;
+        }
+
+        RefreshMeasurementsRequested?.Invoke();
+    }
+
     #region Measurement Commands
 
     /// <summary>

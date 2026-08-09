@@ -2,7 +2,12 @@
 ; Requires Inno Setup 6.x - https://jrsoftware.org/isinfo.php
 
 #define MyAppName "OpenJPDF"
+#ifndef MyAppVersion
 #define MyAppVersion "1.0.4"
+#endif
+#ifndef PublishDir
+#define PublishDir "..\bin\Release\net8.0-windows\win-x64\publish"
+#endif
 #define MyAppPublisher "Sittichat Pothising"
 #define MyAppURL "https://github.com/POBIM/OpenJPDF"
 #define MyAppExeName "OpenJPDF.exe"
@@ -101,7 +106,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Main application files (published folder)
-Source: "..\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; OCR trained data files (Tesseract)
 ; NOTE: Download eng.traineddata and tha.traineddata from https://github.com/tesseract-ocr/tessdata

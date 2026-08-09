@@ -58,8 +58,11 @@ public class PdfService : IPdfService, IDisposable
     private byte[]? _basePdfBytes;
     
     // LRU caches for rendered pages and thumbnails
-    private readonly PageCache _pageCache = new(20);      // Full-size page cache
+    private readonly PageCache _pageCache = new(8);       // Full-size pages can be tens of MB at high zoom
     private readonly PageCache _thumbnailCache = new(100); // Thumbnail cache (smaller images = more can fit)
+    private readonly object _pageMetadataLock = new();
+    private readonly Dictionary<int, (float Width, float Height)> _pageDimensionCache = new();
+    private readonly Dictionary<int, int> _pageInherentRotationCache = new();
     
     // Static cache for available system fonts (pre-populated on first use)
     private static readonly Lazy<HashSet<string>> _availableSystemFonts = new(() =>
@@ -86,9 +89,9 @@ public class PdfService : IPdfService, IDisposable
         return fonts;
     });
 
-    // PERFORMANCE FIX: Cache for PdfFont objects to avoid repeated font loading
-    // Key: (fontFamily, isBold, isItalic, needsThai) -> PdfFont
-    private static readonly Dictionary<(string, bool, bool, bool), PdfFont> _fontCache = new();
+    // PdfFont objects become tied to a PdfDocument once written. Keep this cache
+    // instance-local and clear it between writer documents/phases.
+    private readonly Dictionary<(string, bool, bool, bool), PdfFont> _fontCache = new();
 
     public int PageCount => _pageCount;
 
@@ -445,10 +448,16 @@ public class PdfService : IPdfService, IDisposable
     /// <summary>
     /// Get the inherent rotation of a PDF page (from PDF metadata)
     /// </summary>
-    private int GetPdfPageRotation(int pageNumber)
+    public int GetPageInherentRotation(int pageNumber)
     {
         if (_pdfBytes == null || pageNumber < 0 || pageNumber >= PageCount)
             return 0;
+
+        lock (_pageMetadataLock)
+        {
+            if (_pageInherentRotationCache.TryGetValue(pageNumber, out int cachedRotation))
+                return cachedRotation;
+        }
 
         try
         {
@@ -461,7 +470,12 @@ public class PdfService : IPdfService, IDisposable
             int rotation = page.GetRotation();
             
             // Normalize rotation to 0, 90, 180, or 270
-            return rotation % 360;
+            int normalizedRotation = NormalizePdfRotation(rotation);
+            lock (_pageMetadataLock)
+            {
+                _pageInherentRotationCache[pageNumber] = normalizedRotation;
+            }
+            return normalizedRotation;
         }
         catch (Exception ex)
         {
@@ -478,6 +492,12 @@ public class PdfService : IPdfService, IDisposable
         if (_pdfBytes == null || pageNumber < 0 || pageNumber >= _pageCount)
             return (0, 0);
 
+        lock (_pageMetadataLock)
+        {
+            if (_pageDimensionCache.TryGetValue(pageNumber, out var cachedDimensions))
+                return cachedDimensions;
+        }
+
         try
         {
             using var memStream = new MemoryStream(_pdfBytes, writable: false);
@@ -488,7 +508,12 @@ public class PdfService : IPdfService, IDisposable
             var page = pdfDoc.GetPage(pageNumber + 1);
             var pageSize = page.GetPageSize();
             
-            return (pageSize.GetWidth(), pageSize.GetHeight());
+            var dimensions = (pageSize.GetWidth(), pageSize.GetHeight());
+            lock (_pageMetadataLock)
+            {
+                _pageDimensionCache[pageNumber] = dimensions;
+            }
+            return dimensions;
         }
         catch (Exception ex)
         {
@@ -728,6 +753,7 @@ public class PdfService : IPdfService, IDisposable
                     // Apply deletions, rotations, redactions, moved content
                     bool useMemoryStream = sourceFile == _currentFilePath && _basePdfBytes != null;
                     using var memStream = useMemoryStream ? new MemoryStream(_basePdfBytes!, writable: false) : null;
+                    ClearPdfFontCache();
                     using (var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile))
                     using (var writer = new PdfWriter(structuralTempFile))
                     using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
@@ -861,6 +887,7 @@ public class PdfService : IPdfService, IDisposable
                 if (hasAnnotations)
                 {
                     string annotatedTempFile = IoPath.GetTempFileName();
+                    ClearPdfFontCache();
                     using (var intermediateStream = new MemoryStream(intermediateBytes, writable: false))
                     using (var reader = new PdfReader(intermediateStream))
                     using (var writer = new PdfWriter(annotatedTempFile))
@@ -1147,6 +1174,7 @@ public class PdfService : IPdfService, IDisposable
                 _pdfBytes = IoFile.ReadAllBytes(filePath);
                 _basePdfBytes = (byte[])_pdfBytes.Clone();
                 _currentFilePath = filePath;
+                ClearPageMetadataCache();
 
                 // Clear structural modifications (consumed by Phase 1)
                 _pageRotations.Clear();
@@ -1192,6 +1220,7 @@ public class PdfService : IPdfService, IDisposable
                 _pdfBytes = IoFile.ReadAllBytes(filePath);
                 _basePdfBytes = (byte[])_pdfBytes.Clone();
                 _currentFilePath = filePath;
+                ClearPageMetadataCache();
 
                 // Update page count
                 using var memStream = new MemoryStream(_pdfBytes, writable: false);
@@ -1222,6 +1251,31 @@ public class PdfService : IPdfService, IDisposable
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error reloading PDF bytes: {ex.Message}");
+                return false;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Write the current in-memory PDF to a standalone file without changing the
+    /// active source path or any pending service state.
+    /// </summary>
+    public async Task<bool> ExportWorkingCopyAsync(string filePath)
+    {
+        if (_pdfBytes == null)
+            return false;
+
+        byte[] snapshot = (byte[])_pdfBytes.Clone();
+        return await Task.Run(() =>
+        {
+            try
+            {
+                IoFile.WriteAllBytes(filePath, snapshot);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error exporting working PDF: {ex.Message}");
                 return false;
             }
         });
@@ -1459,7 +1513,7 @@ public class PdfService : IPdfService, IDisposable
     /// Priority: 1) Bundled fonts 2) System fonts 3) Fallback
     /// PERFORMANCE FIX: Uses cache to avoid repeated font loading
     /// </summary>
-    private static PdfFont GetThaiCompatibleFont(string fontFamily, bool isBold, bool isItalic, string? textContent = null)
+    private PdfFont GetThaiCompatibleFont(string fontFamily, bool isBold, bool isItalic, string? textContent = null)
     {
         string systemFontsFolder = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
         bool needsThai = textContent != null && ContainsThai(textContent);
@@ -1647,7 +1701,7 @@ public class PdfService : IPdfService, IDisposable
     /// <summary>
     /// PERFORMANCE FIX: Helper method to cache a font
     /// </summary>
-    private static void CacheFont((string, bool, bool, bool) key, PdfFont font)
+    private void CacheFont((string, bool, bool, bool) key, PdfFont font)
     {
         lock (_fontCache)
         {
@@ -1868,6 +1922,7 @@ public class PdfService : IPdfService, IDisposable
 
                 _pdfBytes = outputStream.ToArray();
                 _basePdfBytes = (byte[])_pdfBytes.Clone();
+                ClearPageMetadataCache();
 
                 _pageRotations.Clear();
                 _deletedPages.Clear();
@@ -1892,7 +1947,7 @@ public class PdfService : IPdfService, IDisposable
         });
     }
 
-    public async Task<bool> SplitPdfAsync(string inputFile, string outputFolder)
+    public async Task<bool> SplitPdfAsync(string inputFile, string outputFolder, string? outputBaseName = null)
     {
         return await Task.Run(() =>
         {
@@ -1904,7 +1959,9 @@ public class PdfService : IPdfService, IDisposable
                 using var reader = new PdfReader(inputFile);
                 using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
 
-                string baseName = IoPath.GetFileNameWithoutExtension(inputFile);
+                string baseName = string.IsNullOrWhiteSpace(outputBaseName)
+                    ? IoPath.GetFileNameWithoutExtension(inputFile)
+                    : IoPath.GetFileNameWithoutExtension(outputBaseName);
 
                 for (int i = 1; i <= srcDoc.GetNumberOfPages(); i++)
                 {
@@ -2004,7 +2061,8 @@ public class PdfService : IPdfService, IDisposable
                 System.Diagnostics.Debug.WriteLine($"Config: HeaderEnabled={config.HeaderEnabled}, FooterEnabled={config.FooterEnabled}");
                 
                 string tempFile = IoPath.GetTempFileName();
-                
+
+                ClearPdfFontCache();
                 using (var reader = new PdfReader(inputFile))
                 using (var writer = new PdfWriter(tempFile))
                 using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
@@ -2025,59 +2083,65 @@ public class PdfService : IPdfService, IDisposable
                         }
                         
                         var page = pdfDoc.GetPage(pageNum);
-                        var pageSize = page.GetPageSize();
+                        var mediaBox = page.GetPageSize();
+                        int pageRotation = page.GetRotation();
+                        var (displayWidth, displayHeight) = GetDisplayPageSize(mediaBox, pageRotation);
                         var canvas = new PdfCanvas(page.NewContentStreamAfter(), page.GetResources(), pdfDoc);
-                        
-                        float leftMargin = 50f; // Left margin in points
-                        float rightMargin = pageSize.GetWidth() - 50f; // Right margin
-                        float centerX = pageSize.GetWidth() / 2f;
-                        
-                        System.Diagnostics.Debug.WriteLine($"Page {pageNum}: size={pageSize.GetWidth()}x{pageSize.GetHeight()}");
-                        
-                        // Apply header
-                        if (config.HeaderEnabled)
+                        canvas.SaveState();
+                        try
                         {
-                            float headerY = pageSize.GetHeight() - config.HeaderMargin;
-                            System.Diagnostics.Debug.WriteLine($"Drawing header at Y={headerY}");
-                            
-                            DrawHeaderFooterElement(canvas, config.HeaderLeft, pageNum, totalPages, fileNameToUse, now,
-                                leftMargin, headerY, HorizontalPosition.Left, pdfDoc);
-                            DrawHeaderFooterElement(canvas, config.HeaderCenter, pageNum, totalPages, fileNameToUse, now,
-                                centerX, headerY, HorizontalPosition.Center, pdfDoc);
-                            DrawHeaderFooterElement(canvas, config.HeaderRight, pageNum, totalPages, fileNameToUse, now,
-                                rightMargin, headerY, HorizontalPosition.Right, pdfDoc);
-                        }
-                        
-                        // Apply footer
-                        if (config.FooterEnabled)
-                        {
-                            float footerY = config.FooterMargin;
-                            System.Diagnostics.Debug.WriteLine($"Drawing footer at Y={footerY}");
-                            
-                            DrawHeaderFooterElement(canvas, config.FooterLeft, pageNum, totalPages, fileNameToUse, now,
-                                leftMargin, footerY, HorizontalPosition.Left, pdfDoc);
-                            DrawHeaderFooterElement(canvas, config.FooterCenter, pageNum, totalPages, fileNameToUse, now,
-                                centerX, footerY, HorizontalPosition.Center, pdfDoc);
-                            DrawHeaderFooterElement(canvas, config.FooterRight, pageNum, totalPages, fileNameToUse, now,
-                                rightMargin, footerY, HorizontalPosition.Right, pdfDoc);
-                        }
-                        
-                        // Apply custom text boxes (with page scope check)
-                        foreach (var customBox in config.CustomTextBoxes)
-                        {
-                            if (customBox.ShouldApplyToPage(pageNum, totalPages))
+                            // Draw in the same top-level visual coordinate system as the WPF preview,
+                            // including the page's inherent PDF rotation and non-zero media-box origin.
+                            ApplyDisplayToPdfTransform(canvas, mediaBox, pageRotation);
+
+                            float leftMargin = 50f;
+                            float rightMargin = displayWidth - 50f;
+                            float centerX = displayWidth / 2f;
+
+                            System.Diagnostics.Debug.WriteLine(
+                                $"Page {pageNum}: displaySize={displayWidth}x{displayHeight}, rotation={pageRotation}");
+
+                            if (config.HeaderEnabled)
                             {
-                                DrawCustomTextBox(canvas, customBox, pageNum, totalPages, fileNameToUse, now, pdfDoc);
+                                float headerY = displayHeight - config.HeaderMargin;
+                                DrawHeaderFooterElement(canvas, config.HeaderLeft, pageNum, totalPages, fileNameToUse, now,
+                                    leftMargin, headerY, HorizontalPosition.Left, pdfDoc);
+                                DrawHeaderFooterElement(canvas, config.HeaderCenter, pageNum, totalPages, fileNameToUse, now,
+                                    centerX, headerY, HorizontalPosition.Center, pdfDoc);
+                                DrawHeaderFooterElement(canvas, config.HeaderRight, pageNum, totalPages, fileNameToUse, now,
+                                    rightMargin, headerY, HorizontalPosition.Right, pdfDoc);
+                            }
+
+                            if (config.FooterEnabled)
+                            {
+                                float footerY = config.FooterMargin;
+                                DrawHeaderFooterElement(canvas, config.FooterLeft, pageNum, totalPages, fileNameToUse, now,
+                                    leftMargin, footerY, HorizontalPosition.Left, pdfDoc);
+                                DrawHeaderFooterElement(canvas, config.FooterCenter, pageNum, totalPages, fileNameToUse, now,
+                                    centerX, footerY, HorizontalPosition.Center, pdfDoc);
+                                DrawHeaderFooterElement(canvas, config.FooterRight, pageNum, totalPages, fileNameToUse, now,
+                                    rightMargin, footerY, HorizontalPosition.Right, pdfDoc);
+                            }
+
+                            foreach (var customBox in config.CustomTextBoxes)
+                            {
+                                if (customBox.ShouldApplyToPage(pageNum, totalPages))
+                                {
+                                    DrawCustomTextBox(canvas, customBox, pageNum, totalPages, fileNameToUse, now, pdfDoc);
+                                }
+                            }
+
+                            foreach (var imageBox in config.CustomImageBoxes)
+                            {
+                                if (imageBox.ShouldApplyToPage(pageNum, totalPages))
+                                {
+                                    DrawCustomImageBox(canvas, imageBox, pdfDoc, pageNum);
+                                }
                             }
                         }
-                        
-                        // Apply custom image boxes (with page scope check)
-                        foreach (var imageBox in config.CustomImageBoxes)
+                        finally
                         {
-                            if (imageBox.ShouldApplyToPage(pageNum, totalPages))
-                            {
-                                DrawCustomImageBox(canvas, imageBox, pdfDoc, pageNum);
-                            }
+                            canvas.RestoreState();
                         }
                     }
                 }
@@ -2450,6 +2514,25 @@ public class PdfService : IPdfService, IDisposable
         _basePdfBytes = null;
         _pageCache.Clear();
         _thumbnailCache.Clear();
+        ClearPageMetadataCache();
+        ClearPdfFontCache();
+    }
+
+    private void ClearPageMetadataCache()
+    {
+        lock (_pageMetadataLock)
+        {
+            _pageDimensionCache.Clear();
+            _pageInherentRotationCache.Clear();
+        }
+    }
+
+    private void ClearPdfFontCache()
+    {
+        lock (_fontCache)
+        {
+            _fontCache.Clear();
+        }
     }
 
     /// <summary>

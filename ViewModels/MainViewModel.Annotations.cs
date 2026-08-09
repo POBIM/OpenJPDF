@@ -78,7 +78,7 @@ public partial class MainViewModel
         SelectedAnnotation = annotationItem;
 
         // Record undo action
-        _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, annotationItem));
+        RecordUndoableAction(new AddAnnotationAction(Annotations, annotationItem));
 
         RefreshAnnotationsRequested?.Invoke();
         CurrentEditMode = EditMode.None;
@@ -264,7 +264,7 @@ public partial class MainViewModel
             SelectedAnnotation = annotationItem;
 
             // Record undo action
-            _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, annotationItem));
+            RecordUndoableAction(new AddAnnotationAction(Annotations, annotationItem));
 
             addPreviewCallback?.Invoke(annotation, annotationItem, ZoomScale);
 
@@ -299,7 +299,7 @@ public partial class MainViewModel
             SelectedAnnotation = annotationItem;
 
             // Record undo action
-            _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, annotationItem));
+            RecordUndoableAction(new AddAnnotationAction(Annotations, annotationItem));
 
             addPreviewCallback?.Invoke(annotation, annotationItem, ZoomScale);
 
@@ -332,7 +332,7 @@ public partial class MainViewModel
         SelectedAnnotation = annotationItem;
 
         // Record undo action
-        _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, annotationItem));
+        RecordUndoableAction(new AddAnnotationAction(Annotations, annotationItem));
 
         addPreviewCallback?.Invoke(annotation, annotationItem, ZoomScale);
 
@@ -445,7 +445,7 @@ public partial class MainViewModel
         SelectedAnnotation = annotationItem;
 
         // Record undo action
-        _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, annotationItem));
+        RecordUndoableAction(new AddAnnotationAction(Annotations, annotationItem));
 
         addPreviewCallback?.Invoke(annotation, annotationItem, ZoomScale);
 
@@ -894,7 +894,7 @@ public partial class MainViewModel
 
         // Record undo action before deleting
         var deleteAction = new DeleteAnnotationAction(Annotations, annotation);
-        _undoRedoManager.RecordAction(deleteAction);
+        RecordUndoableAction(deleteAction);
 
         Annotations.Remove(annotation);
         if (SelectedAnnotation == annotation)
@@ -990,7 +990,7 @@ public partial class MainViewModel
             SelectedAnnotation = newAnnotation;
 
             // Record undo action
-            _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, newAnnotation));
+            RecordUndoableAction(new AddAnnotationAction(Annotations, newAnnotation));
 
             RefreshAnnotationsRequested?.Invoke();
             StatusMessage = $"Annotation pasted on page {CurrentPageIndex + 1}.";

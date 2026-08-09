@@ -514,8 +514,9 @@ public partial class PrintPreviewDialog : Window
                         double contentWidth = wpfWidth - (wpfMargin * 2);
                         double contentHeight = wpfHeight - (wpfMargin * 2);
                         
-                        double imageWidth = finalImage.PixelWidth;
-                        double imageHeight = finalImage.PixelHeight;
+                        const double renderScale = 2.0;
+                        double imageWidth = finalImage.Width / renderScale;
+                        double imageHeight = finalImage.Height / renderScale;
                         
                         double scale;
                         if (scaleTag == "Fit")
@@ -526,19 +527,25 @@ public partial class PrintPreviewDialog : Window
                         }
                         else
                         {
-                            scale = int.Parse(scaleTag) / 100.0 * (96.0 / 72.0); // Convert to screen scale
+                            scale = int.Parse(scaleTag) / 100.0;
                         }
                         
                         double scaledWidth = imageWidth * scale;
                         double scaledHeight = imageHeight * scale;
                         
-                        // Center on page
+                        // Limit oversized output uniformly so its aspect ratio is preserved.
+                        double fitLimit = Math.Min(
+                            contentWidth / Math.Max(1, scaledWidth),
+                            contentHeight / Math.Max(1, scaledHeight));
+                        if (fitLimit < 1)
+                        {
+                            scaledWidth *= fitLimit;
+                            scaledHeight *= fitLimit;
+                        }
+
+                        // Center after the final size is known.
                         double offsetX = wpfMargin + (contentWidth - scaledWidth) / 2;
                         double offsetY = wpfMargin + (contentHeight - scaledHeight) / 2;
-                        
-                        // Ensure image fits within margins
-                        scaledWidth = Math.Min(scaledWidth, contentWidth);
-                        scaledHeight = Math.Min(scaledHeight, contentHeight);
                         
                         image.Width = scaledWidth;
                         image.Height = scaledHeight;

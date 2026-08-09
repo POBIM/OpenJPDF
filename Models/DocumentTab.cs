@@ -125,6 +125,15 @@ public partial class DocumentTab : ObservableObject, IDisposable
     [ObservableProperty]
     private AnnotationItem? selectedAnnotation;
 
+    [ObservableProperty]
+    private ObservableCollection<MeasurementAnnotation> measurements = new();
+
+    [ObservableProperty]
+    private MeasurementCalibration measurementCalibration = new();
+
+    [ObservableProperty]
+    private MeasurementAnnotation? selectedMeasurement;
+
     /// <summary>
     /// Header/footer settings for this document.
     /// </summary>
@@ -295,6 +304,7 @@ public partial class DocumentTab : ObservableObject, IDisposable
             PageThumbnails.Clear();
             PageImages.Clear();
             Annotations.Clear();
+            Measurements.Clear();
             SelectedThumbnails.Clear();
             _pageRotations.Clear();
             

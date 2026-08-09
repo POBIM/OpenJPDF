@@ -30,7 +30,7 @@ dotnet publish -c Release -r win-x64 --self-contained true
 
 Installer will be created at:
 ```
-installer\output\OpenJPDF-Setup-1.0.2.exe
+installer\output\OpenJPDF-Setup-<version>.exe
 ```
 
 ## Installer Features
@@ -45,7 +45,7 @@ installer\output\OpenJPDF-Setup-1.0.2.exe
   - Older version → Prompts to upgrade
   - Same version → Prompts to reinstall
   - Newer version → Warns about downgrade
-- **Multi-language**: Supports English and Thai
+- **Installer language**: English (the application itself supports Thai content)
 
 ## OCR Setup (Required for text recognition)
 

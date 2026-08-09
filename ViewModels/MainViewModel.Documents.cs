@@ -5,6 +5,8 @@
 // See LICENSE file for full license details.
 
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using OpenJPDF.Models;
@@ -44,6 +46,8 @@ public partial class MainViewModel
     /// </summary>
     public bool HasOpenDocuments => OpenDocuments.Count > 0;
 
+    public bool HasUnsavedDocuments => OpenDocuments.Any(document => document.HasUnsavedChanges);
+
     #endregion
 
     #region Document Tab Changed Handler
@@ -75,6 +79,9 @@ public partial class MainViewModel
             PageThumbnails.Clear();
             PageImages.Clear();
             Annotations.Clear();
+            Measurements.Clear();
+            MeasurementCalibration = new MeasurementCalibration();
+            SelectedMeasurement = null;
             HeaderFooterConfig = null;
             CurrentPageImage = null;
         }
@@ -82,6 +89,7 @@ public partial class MainViewModel
         // Notify property changes
         OnPropertyChanged(nameof(HasMultipleDocuments));
         OnPropertyChanged(nameof(HasOpenDocuments));
+        OnPropertyChanged(nameof(HasUnsavedDocuments));
         OnPropertyChanged(nameof(HasHeaderFooter));
         OnPropertyChanged(nameof(WindowTitle));
 
@@ -108,6 +116,10 @@ public partial class MainViewModel
             PageThumbnails = ActiveDocument.PageThumbnails;
             PageImages = ActiveDocument.PageImages;
             Annotations = ActiveDocument.Annotations;
+            AttachAnnotationDirtyTracking(Annotations);
+            Measurements = ActiveDocument.Measurements;
+            MeasurementCalibration = ActiveDocument.MeasurementCalibration;
+            SelectedMeasurement = ActiveDocument.SelectedMeasurement;
             SelectedThumbnails = ActiveDocument.SelectedThumbnails;
             SelectedThumbnail = ActiveDocument.SelectedThumbnail;
             SelectedAnnotation = ActiveDocument.SelectedAnnotation;
@@ -166,8 +178,72 @@ public partial class MainViewModel
         document.CurrentPageImage = CurrentPageImage;
         document.SelectedThumbnail = SelectedThumbnail;
         document.SelectedAnnotation = SelectedAnnotation;
+        document.Measurements = Measurements;
+        document.MeasurementCalibration = MeasurementCalibration;
+        document.SelectedMeasurement = SelectedMeasurement;
         document.HeaderFooterConfig = HeaderFooterConfig;
         document.SetPageRotations(_pageRotations);
+    }
+
+    public void MarkDocumentDirty()
+    {
+        if (_isSyncingDocument || IsSaving || ActiveDocument == null)
+            return;
+
+        ActiveDocument.HasUnsavedChanges = true;
+        OnPropertyChanged(nameof(HasUnsavedDocuments));
+        OnPropertyChanged(nameof(WindowTitle));
+    }
+
+    private void AttachAnnotationDirtyTracking(ObservableCollection<AnnotationItem> annotations)
+    {
+        if (ReferenceEquals(_trackedAnnotations, annotations))
+            return;
+
+        if (_trackedAnnotations != null)
+        {
+            _trackedAnnotations.CollectionChanged -= Annotations_CollectionChanged;
+            foreach (var annotation in _trackedAnnotations)
+            {
+                annotation.PropertyChanged -= Annotation_PropertyChanged;
+            }
+        }
+
+        _trackedAnnotations = annotations;
+        _trackedAnnotations.CollectionChanged += Annotations_CollectionChanged;
+        foreach (var annotation in _trackedAnnotations)
+        {
+            annotation.PropertyChanged += Annotation_PropertyChanged;
+        }
+    }
+
+    private void Annotations_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems != null)
+        {
+            foreach (AnnotationItem annotation in e.OldItems)
+            {
+                annotation.PropertyChanged -= Annotation_PropertyChanged;
+            }
+        }
+
+        if (e.NewItems != null)
+        {
+            foreach (AnnotationItem annotation in e.NewItems)
+            {
+                annotation.PropertyChanged += Annotation_PropertyChanged;
+            }
+        }
+
+        MarkDocumentDirty();
+    }
+
+    private void Annotation_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(AnnotationItem.IsSelected))
+        {
+            MarkDocumentDirty();
+        }
     }
 
     #endregion
@@ -214,6 +290,10 @@ public partial class MainViewModel
                 // Switch to this tab and save
                 ActiveDocument = tab;
                 await Save();
+
+                // Keep the document open when saving failed or was otherwise incomplete.
+                if (tab.HasUnsavedChanges)
+                    return;
             }
         }
 
@@ -238,6 +318,7 @@ public partial class MainViewModel
 
         OnPropertyChanged(nameof(HasMultipleDocuments));
         OnPropertyChanged(nameof(HasOpenDocuments));
+        OnPropertyChanged(nameof(HasUnsavedDocuments));
         StatusMessage = $"Closed '{tab.FileName}'";
     }
 
