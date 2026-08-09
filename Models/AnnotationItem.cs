@@ -80,6 +80,12 @@ public partial class TextAnnotationItem : AnnotationItem
     [ObservableProperty]
     private double height;
 
+    /// <summary>
+    /// Distance from top of text area to baseline (in DIPs)
+    /// </summary>
+    [ObservableProperty]
+    private double baselineOffset;
+
     public override string DisplayName => Text.Length > 20 ? Text[..20] + "..." : Text;
     public override string IconEmoji => "📝";
 
@@ -101,7 +107,8 @@ public partial class TextAnnotationItem : AnnotationItem
         TextAlignment = TextAlignment,
         Width = Width,
         Height = Height,
-        Rotation = Rotation
+        Rotation = Rotation,
+        BaselineOffset = BaselineOffset
     };
 
     public static TextAnnotationItem FromAnnotation(TextAnnotation ann) => new()
@@ -122,7 +129,8 @@ public partial class TextAnnotationItem : AnnotationItem
         TextAlignment = ann.TextAlignment,
         Width = ann.Width,
         Height = ann.Height,
-        Rotation = ann.Rotation
+        Rotation = ann.Rotation,
+        BaselineOffset = ann.BaselineOffset
     };
 }
 
@@ -196,6 +204,41 @@ public partial class ShapeAnnotationItem : AnnotationItem
     [ObservableProperty]
     private double y2;
 
+    partial void OnShapeTypeChanged(ShapeType value)
+    {
+        if (value == ShapeType.Line)
+        {
+            double lineWidth = Width > 0 ? Width : 100;
+            double lineHeight = Height > 0 ? Height : 50;
+
+            if (Math.Abs(X2 - X) < 0.1 && Math.Abs(Y2 - Y) < 0.1)
+            {
+                X2 = X + lineWidth;
+                Y2 = Y + lineHeight;
+            }
+
+            return;
+        }
+
+        if (Width <= 0)
+        {
+            Width = Math.Abs(X2 - X);
+            if (Width <= 0)
+            {
+                Width = 100;
+            }
+        }
+
+        if (Height <= 0)
+        {
+            Height = Math.Abs(Y2 - Y);
+            if (Height <= 0)
+            {
+                Height = 50;
+            }
+        }
+    }
+
     public override string DisplayName => ShapeType.ToString();
     public override string IconEmoji => ShapeType switch
     {
@@ -216,6 +259,7 @@ public partial class ShapeAnnotationItem : AnnotationItem
         FillColor = FillColor,
         StrokeColor = StrokeColor,
         StrokeWidth = StrokeWidth,
+        Rotation = Rotation,
         X2 = X2,
         Y2 = Y2
     };
@@ -231,6 +275,7 @@ public partial class ShapeAnnotationItem : AnnotationItem
         FillColor = ann.FillColor,
         StrokeColor = ann.StrokeColor,
         StrokeWidth = ann.StrokeWidth,
+        Rotation = ann.Rotation,
         X2 = ann.X2,
         Y2 = ann.Y2
     };
@@ -303,7 +348,12 @@ public partial class ExtractedTextItem : AnnotationItem
         FontSize = FontSize,
         Color = Color,
         IsDeleted = IsDeleted,
-        IsModified = IsModified
+        IsModified = IsModified,
+        OriginalX = (float)X,
+        OriginalY = (float)Y,
+        OriginalWidth = (float)Width,
+        OriginalHeight = (float)Height,
+        OriginalText = Text
     };
 }
 

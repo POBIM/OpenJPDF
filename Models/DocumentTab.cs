@@ -125,6 +125,12 @@ public partial class DocumentTab : ObservableObject, IDisposable
     [ObservableProperty]
     private AnnotationItem? selectedAnnotation;
 
+    /// <summary>
+    /// Header/footer settings for this document.
+    /// </summary>
+    [ObservableProperty]
+    private HeaderFooterConfig? headerFooterConfig;
+
     #endregion
 
     #region Display Settings
@@ -195,11 +201,47 @@ public partial class DocumentTab : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Get a copy of all pending page rotations.
+    /// </summary>
+    public IReadOnlyDictionary<int, int> GetPageRotations()
+    {
+        return new Dictionary<int, int>(_pageRotations);
+    }
+
+    /// <summary>
+    /// Replace pending page rotations for this document.
+    /// </summary>
+    public void SetPageRotations(IReadOnlyDictionary<int, int> pageRotations)
+    {
+        _pageRotations.Clear();
+
+        foreach (var rotation in pageRotations)
+        {
+            int normalized = rotation.Value % 360;
+            if (normalized < 0) normalized += 360;
+            if (normalized != 0)
+            {
+                _pageRotations[rotation.Key] = normalized;
+            }
+        }
+    }
+
+    /// <summary>
     /// Set the rotation for a specific page
     /// </summary>
     public void SetPageRotation(int pageIndex, int degrees)
     {
-        _pageRotations[pageIndex] = degrees % 360;
+        int normalized = degrees % 360;
+        if (normalized < 0) normalized += 360;
+
+        if (normalized == 0)
+        {
+            _pageRotations.Remove(pageIndex);
+        }
+        else
+        {
+            _pageRotations[pageIndex] = normalized;
+        }
     }
 
     /// <summary>

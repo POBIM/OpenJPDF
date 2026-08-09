@@ -62,6 +62,11 @@ public interface IPdfService
     int GetPageRotation(int pageNumber);
 
     /// <summary>
+    /// Replace pending page rotations with the current UI page-index mapping.
+    /// </summary>
+    void SetPageRotations(IReadOnlyDictionary<int, int> pageRotations);
+
+    /// <summary>
     /// Delete a page
     /// </summary>
     void DeletePage(int pageNumber);
@@ -77,9 +82,21 @@ public interface IPdfService
     Task<bool> SaveAsync(string filePath);
 
     /// <summary>
+    /// Reload PDF bytes from saved file and clear transient annotations.
+    /// Used after Save to ensure display matches the file on disk.
+    /// </summary>
+    Task<bool> ReloadBytesFromFileAsync(string filePath);
+
+    /// <summary>
     /// Merge multiple PDFs
     /// </summary>
     Task<bool> MergePdfsAsync(string[] inputFiles, string outputFile);
+
+    /// <summary>
+    /// Import pages from other PDFs into the currently loaded PDF.
+    /// insertIndex is zero-based; values outside the document append to the end.
+    /// </summary>
+    Task<bool> ImportPdfPagesAsync(string[] inputFiles, int insertIndex);
 
     /// <summary>
     /// Split PDF into individual pages

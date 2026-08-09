@@ -191,10 +191,14 @@ public partial class MainViewModel
                 element.IsModified = false;
                 element.X = element.OriginalX;
                 element.Y = element.OriginalY;
+                element.Width = element.OriginalWidth;
+                element.Height = element.OriginalHeight;
                 element.Text = element.OriginalText;
 
                 item.X = element.X;
                 item.Y = element.Y;
+                item.Width = element.Width;
+                item.Height = element.Height;
                 item.Text = element.Text;
             }
         }
@@ -476,6 +480,15 @@ public partial class MainViewModel
         return (deletedTexts, movedTexts, deletedImages, movedImages);
     }
 
+    private bool HasPendingContentModifications()
+    {
+        if (!IsContentExtracted)
+            return false;
+
+        var (deletedTexts, movedTexts, deletedImages, movedImages) = GetContentModifications();
+        return deletedTexts.Count > 0 || movedTexts.Count > 0 || deletedImages.Count > 0 || movedImages.Count > 0;
+    }
+
     /// <summary>
     /// Called when page changes - update extracted content display
     /// This is called from MainViewModel.OnCurrentPageIndexChanged
@@ -502,6 +515,29 @@ public partial class MainViewModel
         IsContentExtracted = false;
         SelectedExtractedText = null;
         SelectedExtractedImage = null;
+    }
+
+    /// <summary>
+    /// Clear extracted-content edit state after changes have been baked into the saved PDF.
+    /// Prevents the same redactions or moved content from being applied again on the next save.
+    /// </summary>
+    private void ClearBakedContentModifications()
+    {
+        _contentExtractionService = null;
+        _extractedTextByPage.Clear();
+        _extractedImagesByPage.Clear();
+        ExtractedTextItems.Clear();
+        ExtractedImageItems.Clear();
+        IsContentExtracted = false;
+        SelectedExtractedText = null;
+        SelectedExtractedImage = null;
+
+        if (CurrentEditMode == EditMode.SelectContent)
+        {
+            CurrentEditMode = EditMode.None;
+        }
+
+        RefreshExtractedContentRequested?.Invoke();
     }
 
     #endregion
@@ -543,14 +579,18 @@ public partial class MainViewModel
         foreach (var text in deletedTexts)
         {
             // Add redaction at original position
-            pdfService.AddRedaction(text.PageNumber, text.OriginalX, text.OriginalY, text.Width, text.Height);
+            float originalWidth = text.OriginalWidth > 0 ? text.OriginalWidth : text.Width;
+            float originalHeight = text.OriginalHeight > 0 ? text.OriginalHeight : text.Height;
+            pdfService.AddRedaction(text.PageNumber, text.OriginalX, text.OriginalY, originalWidth, originalHeight);
         }
 
         // Add redactions for moved text (redact original position) and add new text
         foreach (var text in movedTexts)
         {
             // Redact original position
-            pdfService.AddRedaction(text.PageNumber, text.OriginalX, text.OriginalY, text.Width, text.Height);
+            float originalWidth = text.OriginalWidth > 0 ? text.OriginalWidth : text.Width;
+            float originalHeight = text.OriginalHeight > 0 ? text.OriginalHeight : text.Height;
+            pdfService.AddRedaction(text.PageNumber, text.OriginalX, text.OriginalY, originalWidth, originalHeight);
             // Add text at new position
             pdfService.AddMovedText(text);
         }

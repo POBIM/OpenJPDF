@@ -34,5 +34,7 @@ public class ExtractedTextElement
     // Original position for undo
     public float OriginalX { get; set; }
     public float OriginalY { get; set; }
+    public float OriginalWidth { get; set; }
+    public float OriginalHeight { get; set; }
     public string OriginalText { get; set; } = string.Empty;
 }

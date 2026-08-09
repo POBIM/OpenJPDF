@@ -55,6 +55,132 @@ public partial class MainViewModel
         
         return indices;
     }
+
+    private List<PageThumbnail> CapturePageOrder()
+    {
+        return PageThumbnails.ToList();
+    }
+
+    private sealed record SelectedPageMoveData(
+        List<PageThumbnail> Items,
+        List<int> Indices,
+        List<PageImage> PageImages);
+
+    private SelectedPageMoveData GetSelectedPageMoveData()
+    {
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        var indexMap = BuildThumbnailIndexMap();
+
+        var selectedItems = SelectedThumbnails
+            .Where(t => indexMap.ContainsKey(t))
+            .OrderBy(t => indexMap[t])
+            .ToList();
+
+        var selectedIndices = selectedItems
+            .Select(t => indexMap[t])
+            .ToList();
+
+        var selectedPageImages = selectedIndices
+            .Where(idx => idx >= 0 && idx < pageImages.Count)
+            .Select(idx => pageImages[idx])
+            .ToList();
+
+        return new SelectedPageMoveData(selectedItems, selectedIndices, selectedPageImages);
+    }
+
+    private void MoveSelectedPagesBatch(int targetIndex)
+    {
+        var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        var oldOrder = CapturePageOrder();
+        var moveData = GetSelectedPageMoveData();
+
+        if (moveData.Items.Count == 0)
+            return;
+
+        targetIndex = Math.Clamp(targetIndex, 0, PageThumbnails.Count);
+        int adjustedTargetIndex = targetIndex - moveData.Indices.Count(idx => idx < targetIndex);
+        adjustedTargetIndex = Math.Clamp(adjustedTargetIndex, 0, PageThumbnails.Count - moveData.Items.Count);
+
+        foreach (var item in moveData.Items)
+        {
+            PageThumbnails.Remove(item);
+        }
+
+        foreach (var idx in moveData.Indices.OrderByDescending(i => i))
+        {
+            if (idx >= 0 && idx < pageImages.Count)
+            {
+                pageImages.RemoveAt(idx);
+            }
+        }
+
+        for (int i = 0; i < moveData.Items.Count; i++)
+        {
+            PageThumbnails.Insert(adjustedTargetIndex + i, moveData.Items[i]);
+        }
+
+        int pageImagesTargetIndex = Math.Min(adjustedTargetIndex, pageImages.Count);
+        for (int i = 0; i < moveData.PageImages.Count; i++)
+        {
+            pageImages.Insert(pageImagesTargetIndex + i, moveData.PageImages[i]);
+        }
+
+        UpdatePageNumbers();
+        UpdatePageImageNumbers();
+        RemapPageBoundStateAfterReorder(oldOrder);
+    }
+
+    private void RemapPageBoundStateAfterReorder(List<PageThumbnail> oldOrder)
+    {
+        if (oldOrder.Count == 0) return;
+
+        var newIndexByThumbnail = BuildThumbnailIndexMap();
+        var oldToNewIndex = new Dictionary<int, int>();
+
+        for (int oldIndex = 0; oldIndex < oldOrder.Count; oldIndex++)
+        {
+            if (newIndexByThumbnail.TryGetValue(oldOrder[oldIndex], out int newIndex))
+            {
+                oldToNewIndex[oldIndex] = newIndex;
+            }
+        }
+
+        var annotationsToRemove = new List<AnnotationItem>();
+        foreach (var annotation in Annotations)
+        {
+            if (oldToNewIndex.TryGetValue(annotation.PageNumber, out int newPageNumber))
+            {
+                annotation.PageNumber = newPageNumber;
+            }
+            else
+            {
+                annotationsToRemove.Add(annotation);
+            }
+        }
+
+        foreach (var annotation in annotationsToRemove)
+        {
+            Annotations.Remove(annotation);
+        }
+
+        if (_pageRotations.Count > 0)
+        {
+            var remappedRotations = new Dictionary<int, int>();
+            foreach (var rotation in _pageRotations)
+            {
+                if (oldToNewIndex.TryGetValue(rotation.Key, out int newPageNumber))
+                {
+                    remappedRotations[newPageNumber] = rotation.Value;
+                }
+            }
+
+            _pageRotations.Clear();
+            foreach (var rotation in remappedRotations)
+            {
+                _pageRotations[rotation.Key] = rotation.Value;
+            }
+        }
+    }
     
     #endregion
 
@@ -157,7 +283,6 @@ public partial class MainViewModel
             return;
         }
 
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         int count = SelectedThumbnails.Count;
         
         // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
@@ -168,8 +293,8 @@ public partial class MainViewModel
             int currentRotation = GetPageRotation(idx);
             int newRotation = (currentRotation + 90) % 360;
             _pageRotations[idx] = newRotation;
-            pdfService.RotatePage(idx, 90);
         }
+        SyncPageRotationsToService();
 
         await RefreshThumbnailsAsync(indicesToRefresh);
 
@@ -196,7 +321,6 @@ public partial class MainViewModel
             return;
         }
 
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         int count = SelectedThumbnails.Count;
         
         // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
@@ -207,8 +331,8 @@ public partial class MainViewModel
             int currentRotation = GetPageRotation(idx);
             int newRotation = (currentRotation + 270) % 360;
             _pageRotations[idx] = newRotation;
-            pdfService.RotatePage(idx, -90);
         }
+        SyncPageRotationsToService();
 
         await RefreshThumbnailsAsync(indicesToRefresh);
 
@@ -239,21 +363,10 @@ public partial class MainViewModel
             return;
         }
 
-        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
         var sortedIndices = GetSelectedIndicesSorted(descending: false);
-        var indicesSet = new HashSet<int>(sortedIndices);
-
         if (sortedIndices.Count == 0 || sortedIndices[0] == 0) return;
 
-        foreach (var idx in sortedIndices)
-        {
-            int targetIdx = idx - 1;
-            if (targetIdx >= 0 && !indicesSet.Contains(targetIdx))
-            {
-                MovePageInternal(idx, targetIdx);
-            }
-        }
-
+        MoveSelectedPagesBatch(sortedIndices[0] - 1);
         SyncPageOrderToService();
         LoadCurrentPage();
         HasPageOrderChanged = true;
@@ -272,21 +385,10 @@ public partial class MainViewModel
             return;
         }
 
-        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
-        var sortedIndices = GetSelectedIndicesSorted(descending: true);
-        var indicesSet = new HashSet<int>(sortedIndices);
+        var sortedIndices = GetSelectedIndicesSorted(descending: false);
+        if (sortedIndices.Count == 0 || sortedIndices[^1] == PageThumbnails.Count - 1) return;
 
-        if (sortedIndices.Count == 0 || sortedIndices[0] == PageThumbnails.Count - 1) return;
-
-        foreach (var idx in sortedIndices)
-        {
-            int targetIdx = idx + 1;
-            if (targetIdx < PageThumbnails.Count && !indicesSet.Contains(targetIdx))
-            {
-                MovePageInternal(idx, targetIdx);
-            }
-        }
-
+        MoveSelectedPagesBatch(sortedIndices[^1] + 2);
         SyncPageOrderToService();
         LoadCurrentPage();
         HasPageOrderChanged = true;
@@ -305,50 +407,8 @@ public partial class MainViewModel
             return;
         }
 
-        var pageImages = ActiveDocument?.PageImages ?? PageImages;
-        
-        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
-        var indexMap = BuildThumbnailIndexMap();
-        
-        // Get selected items in their current order
-        var selectedItems = SelectedThumbnails
-            .Where(t => indexMap.ContainsKey(t))
-            .OrderBy(t => indexMap[t])
-            .ToList();
-
-        // Get corresponding page images
-        var selectedIndices = selectedItems
-            .Select(t => indexMap[t])
-            .ToList();
-
-        var selectedPageImages = selectedIndices
-            .Where(idx => idx < pageImages.Count)
-            .Select(idx => pageImages[idx])
-            .ToList();
-
-        // Remove from current positions (in reverse order to maintain indices)
-        foreach (var item in selectedItems.AsEnumerable().Reverse())
-        {
-            PageThumbnails.Remove(item);
-        }
-        foreach (var idx in selectedIndices.OrderByDescending(i => i))
-        {
-            if (idx < pageImages.Count)
-                pageImages.RemoveAt(idx);
-        }
-
-        // Insert at beginning
-        for (int i = 0; i < selectedItems.Count; i++)
-        {
-            PageThumbnails.Insert(i, selectedItems[i]);
-        }
-        for (int i = 0; i < selectedPageImages.Count; i++)
-        {
-            pageImages.Insert(i, selectedPageImages[i]);
-        }
-
-        UpdatePageNumbers();
-        UpdatePageImageNumbers();
+        int selectedCount = SelectedThumbnails.Count;
+        MoveSelectedPagesBatch(0);
         SyncPageOrderToService();
         
         // Navigate to first selected page
@@ -356,7 +416,7 @@ public partial class MainViewModel
         LoadCurrentPage();
         
         HasPageOrderChanged = true;
-        StatusMessage = $"{selectedItems.Count} page(s) moved to beginning. Save to apply changes.";
+        StatusMessage = $"{selectedCount} page(s) moved to beginning. Save to apply changes.";
     }
 
     /// <summary>
@@ -371,58 +431,16 @@ public partial class MainViewModel
             return;
         }
 
-        var pageImages = ActiveDocument?.PageImages ?? PageImages;
-        
-        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
-        var indexMap = BuildThumbnailIndexMap();
-        
-        // Get selected items in their current order
-        var selectedItems = SelectedThumbnails
-            .Where(t => indexMap.ContainsKey(t))
-            .OrderBy(t => indexMap[t])
-            .ToList();
-
-        // Get corresponding page images
-        var selectedIndices = selectedItems
-            .Select(t => indexMap[t])
-            .ToList();
-
-        var selectedPageImages = selectedIndices
-            .Where(idx => idx < pageImages.Count)
-            .Select(idx => pageImages[idx])
-            .ToList();
-
-        // Remove from current positions (in reverse order to maintain indices)
-        foreach (var item in selectedItems.AsEnumerable().Reverse())
-        {
-            PageThumbnails.Remove(item);
-        }
-        foreach (var idx in selectedIndices.OrderByDescending(i => i))
-        {
-            if (idx < pageImages.Count)
-                pageImages.RemoveAt(idx);
-        }
-
-        // Add at end
-        foreach (var item in selectedItems)
-        {
-            PageThumbnails.Add(item);
-        }
-        foreach (var pageImage in selectedPageImages)
-        {
-            pageImages.Add(pageImage);
-        }
-
-        UpdatePageNumbers();
-        UpdatePageImageNumbers();
+        int selectedCount = SelectedThumbnails.Count;
+        MoveSelectedPagesBatch(PageThumbnails.Count);
         SyncPageOrderToService();
         
         // Navigate to first of moved pages
-        CurrentPageIndex = PageThumbnails.Count - selectedItems.Count;
+        CurrentPageIndex = PageThumbnails.Count - selectedCount;
         LoadCurrentPage();
         
         HasPageOrderChanged = true;
-        StatusMessage = $"{selectedItems.Count} page(s) moved to end. Save to apply changes.";
+        StatusMessage = $"{selectedCount} page(s) moved to end. Save to apply changes.";
     }
 
     #endregion
@@ -457,6 +475,7 @@ public partial class MainViewModel
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        var oldOrder = CapturePageOrder();
 
         // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
         var sortedIndices = GetSelectedIndicesSorted(descending: true);
@@ -493,6 +512,8 @@ public partial class MainViewModel
 
         UpdatePageNumbers();
         UpdatePageImageNumbers();
+        RemapPageBoundStateAfterReorder(oldOrder);
+        SyncPageRotationsToService();
         SelectedThumbnails.Clear();
         OnPropertyChanged(nameof(SelectedPagesCount));
         OnPropertyChanged(nameof(HasMultipleSelection));
@@ -517,100 +538,18 @@ public partial class MainViewModel
     #region Page Reorder Methods
 
     /// <summary>
-    /// Move page without firing events (internal use for batch operations)
-    /// </summary>
-    private void MovePageInternal(int fromIndex, int toIndex)
-    {
-        if (fromIndex < 0 || fromIndex >= PageThumbnails.Count ||
-            toIndex < 0 || toIndex >= PageThumbnails.Count ||
-            fromIndex == toIndex)
-            return;
-
-        // Move in PageThumbnails (sidebar)
-        var item = PageThumbnails[fromIndex];
-        PageThumbnails.RemoveAt(fromIndex);
-        PageThumbnails.Insert(toIndex, item);
-        
-        // Move in PageImages (canvas/continuous scroll)
-        var pageImages = ActiveDocument?.PageImages ?? PageImages;
-        if (fromIndex < pageImages.Count)
-        {
-            var pageImage = pageImages[fromIndex];
-            pageImages.RemoveAt(fromIndex);
-            int targetIndex = Math.Min(toIndex, pageImages.Count);
-            pageImages.Insert(targetIndex, pageImage);
-        }
-        
-        UpdatePageNumbers();
-        UpdatePageImageNumbers();
-    }
-
-    /// <summary>
     /// Move selected pages to a target position (for drag-drop)
     /// </summary>
     public void MoveSelectedPagesToIndex(int targetIndex)
     {
         if (SelectedThumbnails.Count == 0) return;
 
-        var pageImages = ActiveDocument?.PageImages ?? PageImages;
-        
-        // PERFORMANCE FIX: Use dictionary lookup instead of O(n²) IndexOf
-        var indexMap = BuildThumbnailIndexMap();
-        
-        // Get indices of selected items before removal
-        var selectedIndices = SelectedThumbnails
-            .Where(t => indexMap.ContainsKey(t))
-            .Select(t => indexMap[t])
-            .OrderBy(idx => idx)
-            .ToList();
-        
-        var selectedItems = SelectedThumbnails
-            .Where(t => indexMap.ContainsKey(t))
-            .OrderBy(t => indexMap[t])
-            .ToList();
-
-        // Collect PageImages that correspond to selected thumbnails
-        var selectedPageImages = selectedIndices
-            .Where(idx => idx < pageImages.Count)
-            .Select(idx => pageImages[idx])
-            .ToList();
-
-        // Remove from PageThumbnails
-        foreach (var item in selectedItems)
-        {
-            PageThumbnails.Remove(item);
-        }
-        
-        // Remove from PageImages (in reverse to maintain indices)
-        foreach (var idx in selectedIndices.OrderByDescending(i => i))
-        {
-            if (idx < pageImages.Count)
-            {
-                pageImages.RemoveAt(idx);
-            }
-        }
-
-        targetIndex = Math.Min(targetIndex, PageThumbnails.Count);
-
-        // Insert into PageThumbnails
-        for (int i = 0; i < selectedItems.Count; i++)
-        {
-            PageThumbnails.Insert(targetIndex + i, selectedItems[i]);
-        }
-        
-        // Insert into PageImages
-        int pageImagesTargetIndex = Math.Min(targetIndex, pageImages.Count);
-        for (int i = 0; i < selectedPageImages.Count; i++)
-        {
-            pageImages.Insert(pageImagesTargetIndex + i, selectedPageImages[i]);
-        }
-
-        UpdatePageNumbers();
-        UpdatePageImageNumbers();
+        int selectedCount = SelectedThumbnails.Count;
+        MoveSelectedPagesBatch(targetIndex);
         SyncPageOrderToService();
         LoadCurrentPage();
         HasPageOrderChanged = true;
-        StatusMessage = $"{selectedItems.Count} page(s) moved. Save to apply changes.";
+        StatusMessage = $"{selectedCount} page(s) moved. Save to apply changes.";
     }
 
     /// <summary>
@@ -624,6 +563,7 @@ public partial class MainViewModel
             return;
 
         var pageImages = ActiveDocument?.PageImages ?? PageImages;
+        var oldOrder = CapturePageOrder();
 
         // Move in PageThumbnails (sidebar)
         var item = PageThumbnails[fromIndex];
@@ -641,6 +581,7 @@ public partial class MainViewModel
 
         UpdatePageNumbers();
         UpdatePageImageNumbers();
+        RemapPageBoundStateAfterReorder(oldOrder);
         SyncPageOrderToService();
         LoadCurrentPage();
         HasPageOrderChanged = true;
@@ -680,6 +621,14 @@ public partial class MainViewModel
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         var newOrder = PageThumbnails.Select(t => t.OriginalPageIndex).ToArray();
         pdfService.SetPageOrder(newOrder);
+        SyncPageRotationsToService();
+    }
+
+    private void SyncPageRotationsToService()
+    {
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        pdfService.SetPageRotations(_pageRotations);
+        ActiveDocument?.SetPageRotations(_pageRotations);
     }
 
     /// <summary>
@@ -774,6 +723,7 @@ public partial class MainViewModel
     private void ClearPageRotations()
     {
         _pageRotations.Clear();
+        SyncPageRotationsToService();
         CurrentPageRotation = 0;
         PageRotationChanged?.Invoke(0);
         
@@ -795,14 +745,12 @@ public partial class MainViewModel
     {
         if (!IsFileLoaded) return;
 
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-
         int currentRotation = GetPageRotation(CurrentPageIndex);
         int newRotation = (currentRotation + 90) % 360;
         _pageRotations[CurrentPageIndex] = newRotation;
         CurrentPageRotation = newRotation;
 
-        pdfService.RotatePage(CurrentPageIndex, 90);
+        SyncPageRotationsToService();
         LoadCurrentPage();
         RefreshThumbnailRotation(CurrentPageIndex);
 
@@ -814,14 +762,12 @@ public partial class MainViewModel
     {
         if (!IsFileLoaded) return;
 
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-
         int currentRotation = GetPageRotation(CurrentPageIndex);
         int newRotation = (currentRotation + 270) % 360;
         _pageRotations[CurrentPageIndex] = newRotation;
         CurrentPageRotation = newRotation;
 
-        pdfService.RotatePage(CurrentPageIndex, -90);
+        SyncPageRotationsToService();
         LoadCurrentPage();
         RefreshThumbnailRotation(CurrentPageIndex);
 
@@ -837,11 +783,12 @@ public partial class MainViewModel
         {
             var pdfService = ActiveDocument?.PdfService ?? _pdfService;
             int rotation = GetPageRotation(pageIndex);
+            int originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
             
             await Task.Run(() =>
             {
                 // GetPageThumbnail already renders with rotation applied
-                var thumbnail = pdfService.GetPageThumbnail(pageIndex, rotation);
+                var thumbnail = pdfService.GetPageThumbnail(originalPageIndex, rotation);
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     if (pageIndex < PageThumbnails.Count)
@@ -863,11 +810,12 @@ public partial class MainViewModel
 
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         int rotation = GetPageRotation(pageIndex);
+        int originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
 
         await Task.Run(() =>
         {
             // GetPageThumbnail already renders with rotation applied
-            var thumbnail = pdfService.GetPageThumbnail(pageIndex, rotation);
+            var thumbnail = pdfService.GetPageThumbnail(originalPageIndex, rotation);
             
             Application.Current.Dispatcher.Invoke(() =>
             {
@@ -891,7 +839,15 @@ public partial class MainViewModel
             return baseThumbnail;
         
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(pageIndex);
+        int originalPageIndex = pageIndex >= 0 && pageIndex < PageThumbnails.Count
+            ? PageThumbnails[pageIndex].OriginalPageIndex
+            : pageIndex;
+        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(originalPageIndex);
+        int rotation = GetPageRotation(pageIndex);
+        if (((rotation % 360) + 360) % 360 is 90 or 270)
+        {
+            (pageWidthPts, pageHeightPts) = (pageHeightPts, pageWidthPts);
+        }
         if (pageWidthPts <= 0 || pageHeightPts <= 0) return baseThumbnail;
         
         int currentPage = pageIndex + 1;
@@ -961,7 +917,7 @@ public partial class MainViewModel
                     catch { }
                 }
                 
-                // Draw CustomTextBoxes (simplified - just draw text)
+                // Draw CustomTextBoxes using the same top-left box semantics as the main preview/export path.
                 foreach (var textBox in HeaderFooterConfig.CustomTextBoxes)
                 {
                     if (!textBox.ShouldApplyToPage(currentPage, TotalPages))
@@ -973,8 +929,11 @@ public partial class MainViewModel
                     try
                     {
                         double x = textBox.OffsetX * scale;
-                        double y = baseThumbnail.PixelHeight - textBox.OffsetY * scale;
+                        double width = textBox.BoxWidth * scale;
+                        double height = textBox.BoxHeight * scale;
+                        double y = baseThumbnail.PixelHeight - (textBox.OffsetY * scale) - height;
                         double fontSize = Math.Max(6, textBox.FontSize * scale);
+                        double padding = 3 * scale;
                         
                         var formattedText = new System.Windows.Media.FormattedText(
                             textBox.Text,
@@ -982,16 +941,26 @@ public partial class MainViewModel
                             System.Windows.FlowDirection.LeftToRight,
                             new System.Windows.Media.Typeface(textBox.FontFamily),
                             fontSize,
-                            System.Windows.Media.Brushes.Black,
+                            new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(textBox.Color)!),
                             1.0);
-                        
+
                         // Apply rotation if needed
                         if (Math.Abs(textBox.Rotation) > 0.001)
                         {
-                            dc.PushTransform(new System.Windows.Media.RotateTransform(textBox.Rotation, x, y));
+                            dc.PushTransform(new System.Windows.Media.RotateTransform(textBox.Rotation, x + width / 2, y + height / 2));
                         }
-                        
-                        dc.DrawText(formattedText, new System.Windows.Point(x, y - fontSize));
+
+                        if (textBox.ShowBorder)
+                        {
+                            var pen = new System.Windows.Media.Pen(
+                                new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(textBox.Color)!),
+                                Math.Max(0.5, 0.5 * scale));
+                            dc.DrawRectangle(null, pen, new System.Windows.Rect(x, y, width, height));
+                        }
+
+                        dc.PushClip(new System.Windows.Media.RectangleGeometry(new System.Windows.Rect(x, y, width, height)));
+                        dc.DrawText(formattedText, new System.Windows.Point(x + padding, y + padding));
+                        dc.Pop();
                         
                         if (Math.Abs(textBox.Rotation) > 0.001)
                             dc.Pop();

@@ -40,4 +40,10 @@ public class TextAnnotation
     /// Rotation angle in degrees (0-360)
     /// </summary>
     public double Rotation { get; set; }
+
+    /// <summary>
+    /// Distance from top of text area to baseline (in DIPs, measured by WPF FormattedText)
+    /// Used for pixel-perfect positioning when saving to PDF
+    /// </summary>
+    public double BaselineOffset { get; set; }
 }

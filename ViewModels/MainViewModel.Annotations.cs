@@ -231,7 +231,7 @@ public partial class MainViewModel
             double pdfX = x / ZoomScale;
             double pdfY = y / ZoomScale;
 
-            var (textWidth, textHeight) = MeasureTextSize(
+            var (textWidth, textHeight, textBaseline) = MeasureTextSize(
                 dialog.InputText, 
                 dialog.FontFamily, 
                 dialog.FontSize, 
@@ -255,7 +255,8 @@ public partial class MainViewModel
                 IsUnderline = dialog.IsUnderline,
                 TextAlignment = dialog.TextAlignment,
                 Width = textWidth,
-                Height = textHeight
+                Height = textHeight,
+                BaselineOffset = textBaseline
             };
 
             var annotationItem = TextAnnotationItem.FromAnnotation(annotation);
@@ -350,7 +351,7 @@ public partial class MainViewModel
     /// Measure text size using WPF FormattedText
     /// Font size is expected in POINTS, will be converted to DIPs for WPF
     /// </summary>
-    private static (double Width, double Height) MeasureTextSize(string text, string fontFamily, float fontSizePoints, bool isBold, bool isItalic)
+    private static (double Width, double Height, double Baseline) MeasureTextSize(string text, string fontFamily, float fontSizePoints, bool isBold, bool isItalic)
     {
         // Convert font size from points to DIPs for WPF measurement
         double fontSizeDips = fontSizePoints * POINTS_TO_DIPS;
@@ -374,8 +375,9 @@ public partial class MainViewModel
 
         double width = formattedText.Width + 4;
         double height = formattedText.Height + 4;
+        double baseline = formattedText.Baseline;
 
-        return (width, height);
+        return (width, height, baseline);
     }
 
     /// <summary>
@@ -390,7 +392,7 @@ public partial class MainViewModel
         while (maxFont - minFont > 0.5f)
         {
             float midFont = (minFont + maxFont) / 2f;
-            var (textWidth, textHeight) = MeasureTextSize(text, fontFamily, midFont, isBold, isItalic);
+            var (textWidth, textHeight, _) = MeasureTextSize(text, fontFamily, midFont, isBold, isItalic);
 
             if (textWidth <= maxWidth - 4 && textHeight <= maxHeight - 4)
             {
@@ -424,7 +426,7 @@ public partial class MainViewModel
 
         float fontSize = CalculateOptimalFontSize(text, boxWidth, boxHeight, "Arial", false, false);
 
-        var (textWidth, textHeight) = MeasureTextSize(text, "Arial", fontSize, false, false);
+        var (textWidth, textHeight, textBaseline) = MeasureTextSize(text, "Arial", fontSize, false, false);
 
         var annotation = new TextAnnotation
         {
@@ -434,7 +436,8 @@ public partial class MainViewModel
             Text = text,
             FontSize = fontSize,
             Width = textWidth,
-            Height = textHeight
+            Height = textHeight,
+            BaselineOffset = textBaseline
         };
 
         var annotationItem = TextAnnotationItem.FromAnnotation(annotation);
@@ -911,12 +914,123 @@ public partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Copy the selected annotation to internal clipboard for cross-page paste
+    /// </summary>
+    [RelayCommand]
+    private void CopySelectedAnnotation()
+    {
+        if (SelectedAnnotation == null) return;
+
+        // Deep-copy via ToAnnotation/FromAnnotation round-trip
+        if (SelectedAnnotation is TextAnnotationItem textItem)
+        {
+            _copiedAnnotation = TextAnnotationItem.FromAnnotation(textItem.ToAnnotation());
+        }
+        else if (SelectedAnnotation is ImageAnnotationItem imgItem)
+        {
+            _copiedAnnotation = ImageAnnotationItem.FromAnnotation(imgItem.ToAnnotation());
+        }
+        else if (SelectedAnnotation is ShapeAnnotationItem shapeItem)
+        {
+            _copiedAnnotation = ShapeAnnotationItem.FromAnnotation(shapeItem.ToAnnotation());
+        }
+        else
+        {
+            return;
+        }
+
+        StatusMessage = "Copied annotation. Press Ctrl+V to paste.";
+    }
+
+    /// <summary>
+    /// Paste the copied annotation onto the current page
+    /// </summary>
+    [RelayCommand]
+    private void PasteAnnotation()
+    {
+        if (_copiedAnnotation == null) return;
+
+        // Deep-copy again so each paste is independent
+        AnnotationItem? newAnnotation = null;
+
+        if (_copiedAnnotation is TextAnnotationItem textItem)
+        {
+            var clone = TextAnnotationItem.FromAnnotation(textItem.ToAnnotation());
+            clone.PageNumber = CurrentPageIndex;
+            clone.X += 20;
+            clone.Y += 20;
+            newAnnotation = clone;
+        }
+        else if (_copiedAnnotation is ImageAnnotationItem imgItem)
+        {
+            var clone = ImageAnnotationItem.FromAnnotation(imgItem.ToAnnotation());
+            clone.PageNumber = CurrentPageIndex;
+            clone.X += 20;
+            clone.Y += 20;
+            newAnnotation = clone;
+        }
+        else if (_copiedAnnotation is ShapeAnnotationItem shapeItem)
+        {
+            var clone = ShapeAnnotationItem.FromAnnotation(shapeItem.ToAnnotation());
+            clone.PageNumber = CurrentPageIndex;
+            clone.X += 20;
+            clone.Y += 20;
+            if (shapeItem.ShapeType == ShapeType.Line)
+            {
+                clone.X2 += 20;
+                clone.Y2 += 20;
+            }
+            newAnnotation = clone;
+        }
+
+        if (newAnnotation != null)
+        {
+            Annotations.Add(newAnnotation);
+            SelectedAnnotation = newAnnotation;
+
+            // Record undo action
+            _undoRedoManager.RecordAction(new AddAnnotationAction(Annotations, newAnnotation));
+
+            RefreshAnnotationsRequested?.Invoke();
+            StatusMessage = $"Annotation pasted on page {CurrentPageIndex + 1}.";
+        }
+    }
+
+    /// <summary>
+    /// Check if there is a copied annotation available for pasting
+    /// </summary>
+    public bool HasCopiedAnnotation => _copiedAnnotation != null;
+
     [RelayCommand]
     private void ApplyChanges()
     {
+        RefreshTextAnnotationMetrics();
         ClearAnnotationsRequested?.Invoke();
         RefreshAnnotationsRequested?.Invoke();
         StatusMessage = "Changes applied. Click 'Save' to save to file.";
+    }
+
+    private void RefreshTextAnnotationMetrics()
+    {
+        foreach (var textItem in Annotations.OfType<TextAnnotationItem>())
+        {
+            RefreshTextAnnotationMetrics(textItem);
+        }
+    }
+
+    private static void RefreshTextAnnotationMetrics(TextAnnotationItem textItem)
+    {
+        var (width, height, baseline) = MeasureTextSize(
+            textItem.Text,
+            textItem.FontFamily,
+            textItem.FontSize,
+            textItem.IsBold,
+            textItem.IsItalic);
+
+        textItem.Width = width;
+        textItem.Height = height;
+        textItem.BaselineOffset = baseline;
     }
 
     /// <summary>
@@ -943,20 +1057,27 @@ public partial class MainViewModel
         {
             HeaderFooterConfig = new HeaderFooterConfig();
         }
+        if (ActiveDocument != null)
+        {
+            ActiveDocument.HeaderFooterConfig = HeaderFooterConfig;
+        }
 
         // Get page dimensions for coordinate conversion
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-        var (pageWidth, pageHeight) = pdfService.GetPageDimensions(CurrentPageIndex);
+        var (pageWidth, pageHeight) = GetCurrentPageDimensionsInPoints();
+        const double DipsToPoints = 72.0 / 96.0;
 
         if (annotation is TextAnnotationItem textItem)
         {
-            // Annotation.Y = distance from page top (in PDF points)
-            // CustomTextBox.OffsetY = distance from page bottom (in PDF points)
-            // Convert: OffsetY = pageHeight - annotation.Y
-            float pdfX = (float)textItem.X;
-            float pdfY = (float)(pageHeight - textItem.Y);
+            RefreshTextAnnotationMetrics(textItem);
 
-            // Create CustomTextBox from annotation (auto-fit, no explicit width/height)
+            // Annotation coordinates are WPF DIPs from page top.
+            // CustomTextBox.OffsetY = distance from page bottom (in PDF points)
+            float boxWidth = (float)Math.Max(textItem.Width * DipsToPoints, textItem.FontSize * 4);
+            float boxHeight = (float)Math.Max(textItem.Height * DipsToPoints, textItem.FontSize * 1.2);
+            float pdfX = (float)(textItem.X * DipsToPoints);
+            float pdfY = (float)(pageHeight - ((textItem.Y + textItem.Height) * DipsToPoints));
+
+            // Create CustomTextBox from annotation using the same box shown in the editor.
             var customTextBox = new CustomTextBox
             {
                 Label = string.IsNullOrWhiteSpace(textItem.Text) 
@@ -970,11 +1091,18 @@ public partial class MainViewModel
                 Color = textItem.Color,
                 IsBold = textItem.IsBold,
                 IsItalic = textItem.IsItalic,
-                ShowBorder = false // No border for auto-fit
+                BoxWidth = boxWidth,
+                BoxHeight = boxHeight,
+                Rotation = textItem.Rotation,
+                ShowBorder = textItem.BorderWidth > 0 || !string.Equals(textItem.BorderColor, "Transparent", StringComparison.OrdinalIgnoreCase)
             };
 
             // Add to Header/Footer config
             HeaderFooterConfig.CustomTextBoxes.Add(customTextBox);
+            if (ActiveDocument != null)
+            {
+                ActiveDocument.HeaderFooterConfig = HeaderFooterConfig;
+            }
 
             // Remove the annotation (it's now managed by Header/Footer)
             Annotations.Remove(annotation);
@@ -983,11 +1111,12 @@ public partial class MainViewModel
         }
         else if (annotation is ImageAnnotationItem imageItem)
         {
-            // Annotation.Y = distance from page top (in annotation coords)
+            // Annotation coordinates are WPF DIPs from page top.
             // CustomImageBox.OffsetY = distance from page bottom (in PDF points)
-            // Convert: OffsetY = pageHeight - annotation.Y - annotation.Height
-            float pdfX = (float)imageItem.X;
-            float pdfY = (float)(pageHeight - imageItem.Y - imageItem.Height);
+            float imageWidth = (float)(imageItem.Width * DipsToPoints);
+            float imageHeight = (float)(imageItem.Height * DipsToPoints);
+            float pdfX = (float)(imageItem.X * DipsToPoints);
+            float pdfY = (float)(pageHeight - ((imageItem.Y + imageItem.Height) * DipsToPoints));
 
             // Create CustomImageBox from annotation
             var customImageBox = new CustomImageBox
@@ -998,14 +1127,18 @@ public partial class MainViewModel
                 ImagePath = imageItem.ImagePath,
                 OffsetX = pdfX,
                 OffsetY = pdfY,
-                Width = (float)imageItem.Width,
-                Height = (float)imageItem.Height,
+                Width = imageWidth,
+                Height = imageHeight,
                 Rotation = imageItem.Rotation,
                 Opacity = 1.0f
             };
 
             // Add to Header/Footer config
             HeaderFooterConfig.CustomImageBoxes.Add(customImageBox);
+            if (ActiveDocument != null)
+            {
+                ActiveDocument.HeaderFooterConfig = HeaderFooterConfig;
+            }
 
             // Remove the annotation (it's now managed by Header/Footer)
             Annotations.Remove(annotation);

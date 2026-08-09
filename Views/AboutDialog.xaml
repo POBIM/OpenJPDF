@@ -30,7 +30,7 @@
                            Foreground="#2196F3" HorizontalAlignment="Center"/>
                 <TextBlock Text="PDF Editor" FontSize="16" 
                            Foreground="#666666" HorizontalAlignment="Center"/>
-                <TextBlock Text="Version 1.0.0" FontSize="11" 
+                <TextBlock Text="Version 1.0.2" FontSize="11" 
                            Foreground="#999999" HorizontalAlignment="Center" Margin="0,3,0,0"/>
             </StackPanel>
 

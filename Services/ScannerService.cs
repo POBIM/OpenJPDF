@@ -34,9 +34,7 @@ public class ScannerService : IDisposable
     private const int WIA_INTENT_IMAGE_TYPE_TEXT = 4;
 
     // WIA Format Constants
-    private static readonly string WIA_FORMAT_BMP = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}";
     private static readonly string WIA_FORMAT_PNG = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}";
-    private static readonly string WIA_FORMAT_JPEG = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}";
 
     // WIA Property IDs for Scanner
     private const int WIA_HORIZONTAL_RESOLUTION = 6147;

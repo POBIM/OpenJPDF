@@ -52,6 +52,7 @@
             </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Merge PDFs" Command="{Binding MergePdfCommand}"/>
+                <MenuItem Header="_Import PDF Pages" Command="{Binding ImportPdfPagesCommand}"/>
                 <MenuItem Header="_Split PDF" Command="{Binding SplitPdfCommand}"/>
                 <MenuItem Header="Extract _Pages" Command="{Binding ExtractPagesCommand}"/>
                 <Separator/>
@@ -162,6 +163,23 @@
                 <Button Style="{StaticResource ToolbarButton}" Command="{Binding ZoomInCommand}" ToolTip="Zoom In">
                     <TextBlock Text="🔍+" FontSize="14"/>
                 </Button>
+                <Button Style="{StaticResource ToolbarButton}" Click="FitPageButton_Click" ToolTip="Fit full page">
+                    <TextBlock Text="Fit Page" FontSize="12"/>
+                </Button>
+                <Button Style="{StaticResource ToolbarButton}" Click="FitWidthButton_Click" ToolTip="Fit page width">
+                    <TextBlock Text="Fit Width" FontSize="12"/>
+                </Button>
+
+                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="8,4"/>
+
+                <!-- Page View Mode -->
+                <ComboBox Width="125" Margin="4,0"
+                          VerticalContentAlignment="Center"
+                          ItemsSource="{Binding PageViewModeOptions}"
+                          DisplayMemberPath="Label"
+                          SelectedValuePath="Mode"
+                          SelectedValue="{Binding PageViewMode, Mode=TwoWay}"
+                          ToolTip="Page view mode"/>
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="8,4"/>
 
@@ -309,6 +327,12 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📑" FontSize="16" Margin="0,0,4,0"/>
                         <TextBlock Text="Merge"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource ToolbarButton}" Command="{Binding ImportPdfPagesCommand}" ToolTip="Import PDF pages into current document">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="➕" FontSize="16" Margin="0,0,4,0"/>
+                        <TextBlock Text="Import PDF"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource ToolbarButton}" Command="{Binding ExtractPagesCommand}" ToolTip="Extract Pages to New PDF">
@@ -712,10 +736,11 @@
                                   ScrollChanged="PdfScrollViewer_ScrollChanged"
                                   Background="#F0F0F0">
                         <Grid HorizontalAlignment="Center">
-                            <!-- All pages stacked vertically (always hidden - using single page view for annotation support) -->
+                            <!-- Continuous view: normal vertical flow with compact spacing -->
                             <ItemsControl x:Name="PdfPagesContainer"
                                           ItemsSource="{Binding PageImages}"
-                                          Visibility="Collapsed">
+                                          VerticalAlignment="Top"
+                                          Visibility="{Binding IsContinuousPageView, Converter={StaticResource BoolToVisibility}}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <StackPanel Orientation="Vertical"/>
@@ -723,18 +748,75 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Margin="0,8" Background="White" 
+                                        <Border Margin="0,6" Background="White" 
                                                 BorderBrush="#BDBDBD" BorderThickness="1"
-                                                HorizontalAlignment="Center">
-                                            <Image Source="{Binding Image}" Stretch="None"/>
+                                                Width="{Binding DisplayWidth}"
+                                                Height="{Binding DisplayHeight}"
+                                                HorizontalAlignment="Center"
+                                                MouseLeftButtonDown="PageContainer_MouseLeftButtonDown">
+                                            <Grid>
+                                                <Image Source="{Binding Image}"
+                                                       Width="{Binding DisplayWidth}"
+                                                       Height="{Binding DisplayHeight}"
+                                                       Stretch="Fill"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                <Border Background="#99000000"
+                                                        HorizontalAlignment="Left"
+                                                        VerticalAlignment="Top"
+                                                        Padding="6,3"
+                                                        Margin="6">
+                                                    <TextBlock Text="{Binding PageNumber, StringFormat='Page {0}'}"
+                                                               Foreground="White"
+                                                               FontSize="11"/>
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- 2/4 page grid view -->
+                            <ItemsControl ItemsSource="{Binding PageImages}"
+                                          VerticalAlignment="Top"
+                                          Visibility="{Binding IsPagedGridView, Converter={StaticResource BoolToVisibility}}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="{Binding DataContext.PageViewColumnCount, RelativeSource={RelativeSource AncestorType=ItemsControl}}"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="6" Background="White"
+                                                BorderBrush="#BDBDBD" BorderThickness="1"
+                                                Width="{Binding DisplayWidth}"
+                                                Height="{Binding DisplayHeight}"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Top"
+                                                MouseLeftButtonDown="PageContainer_MouseLeftButtonDown">
+                                            <Grid>
+                                                <Image Source="{Binding Image}"
+                                                       Width="{Binding DisplayWidth}"
+                                                       Height="{Binding DisplayHeight}"
+                                                       Stretch="Fill"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                <Border Background="#99000000"
+                                                        HorizontalAlignment="Left"
+                                                        VerticalAlignment="Top"
+                                                        Padding="6,3"
+                                                        Margin="6">
+                                                    <TextBlock Text="{Binding PageNumber, StringFormat='Page {0}'}"
+                                                               Foreground="White"
+                                                               FontSize="11"/>
+                                                </Border>
+                                            </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                             
-                            <!-- Single page view with annotation support (always visible when file loaded) -->
+                            <!-- Single page view with annotation support -->
                             <Grid x:Name="PdfContainer" 
-                                  Visibility="{Binding IsFileLoaded, Converter={StaticResource BoolToVisibility}}"
+                                  Visibility="{Binding IsSinglePageSurfaceVisible, Converter={StaticResource BoolToVisibility}}"
                                   MouseLeftButtonDown="PdfContainer_MouseLeftButtonDown"
                                   MouseRightButtonDown="PdfContainer_MouseRightButtonDown"
                                   Cursor="{Binding EditCursor}"
@@ -743,7 +825,8 @@
                                   VerticalAlignment="Top">
                                 <Image x:Name="PdfImage" 
                                        Source="{Binding CurrentPageImage}"
-                                       Stretch="None"/>
+                                       Stretch="None"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
                                 <Canvas x:Name="AnnotationCanvas"/>
                             </Grid>
                         </Grid>

@@ -202,6 +202,8 @@ public class ContentExtractionService
                     Color = color,
                     OriginalX = minX,
                     OriginalY = minY,
+                    OriginalWidth = maxX - minX,
+                    OriginalHeight = maxY - minY,
                     OriginalText = text
                 });
             }

@@ -29,6 +29,11 @@ namespace OpenJPDF.Services;
 
 public class PdfService : IPdfService, IDisposable
 {
+    private const float ScreenToPdf = 72f / 96f;
+    private const double BaseWpfDpi = 96.0;
+    private const double PreviewRenderQuality = 2.0;
+    private const int MaxPreviewRenderDpi = 600;
+
     private string? _currentFilePath;
     private int _pageCount;
     private readonly List<TextAnnotation> _textAnnotations = new();
@@ -47,6 +52,10 @@ public class PdfService : IPdfService, IDisposable
 
     // Performance optimization: Keep file bytes in memory for faster rendering
     private byte[]? _pdfBytes;
+
+    // Base PDF bytes without user annotations - used for re-saving without double-baking
+    // When saving, structural changes are applied to base, then annotations are overlaid
+    private byte[]? _basePdfBytes;
     
     // LRU caches for rendered pages and thumbnails
     private readonly PageCache _pageCache = new(20);      // Full-size page cache
@@ -93,6 +102,7 @@ public class PdfService : IPdfService, IDisposable
                 
                 // Load PDF bytes into memory for faster rendering
                 _pdfBytes = IoFile.ReadAllBytes(filePath);
+                _basePdfBytes = (byte[])_pdfBytes.Clone();
                 
                 // Get page count using iText
                 using var memStream = new MemoryStream(_pdfBytes);
@@ -116,7 +126,7 @@ public class PdfService : IPdfService, IDisposable
                 _pageCache.Clear();
                 _thumbnailCache.Clear();
                 
-                System.Diagnostics.Debug.WriteLine($"[PERF] Loaded PDF into memory: {_pdfBytes.Length / 1024}KB, {_pageCount} pages");
+                System.Diagnostics.Debug.WriteLine($"[PERF] Loaded PDF into memory: {_pdfBytes.Length / 1024}KB, {_pageCount} pages (base bytes stored)");
                 return true;
             }
             catch (Exception ex)
@@ -144,8 +154,12 @@ public class PdfService : IPdfService, IDisposable
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             
-            // Calculate DPI based on scale (96 DPI is standard, so 96 * scale)
-            int dpi = (int)(96 * scale);
+            // Render above the displayed DPI and store matching bitmap DPI metadata.
+            // WPF keeps the same DIP size, while zoomed text/vector edges stay crisp.
+            double qualityScale = Math.Min(PreviewRenderQuality, MaxPreviewRenderDpi / (BaseWpfDpi * Math.Max(scale, 0.01f)));
+            qualityScale = Math.Max(1.0, qualityScale);
+            int dpi = Math.Max(24, (int)Math.Round(BaseWpfDpi * scale * qualityScale));
+            double bitmapDpi = BaseWpfDpi * qualityScale;
             
             // Use memory stream from cached bytes (much faster than file I/O)
             using var memStream = new MemoryStream(_pdfBytes, writable: false);
@@ -175,7 +189,7 @@ public class PdfService : IPdfService, IDisposable
             }
             
             // Use optimized direct conversion (skip PNG encoding)
-            var result = ConvertSkiaBitmapToWpfDirect(skBitmap);
+            var result = ConvertSkiaBitmapToWpfDirect(skBitmap, bitmapDpi);
             
             // Cache the result
             if (result != null)
@@ -322,7 +336,7 @@ public class PdfService : IPdfService, IDisposable
     /// Optimized direct conversion from SkiaSharp to WPF bitmap.
     /// Bypasses PNG encoding for ~3x faster performance.
     /// </summary>
-    private static BitmapSource ConvertSkiaBitmapToWpfDirect(SKBitmap skBitmap)
+    private static BitmapSource ConvertSkiaBitmapToWpfDirect(SKBitmap skBitmap, double dpi = BaseWpfDpi)
     {
         try
         {
@@ -335,10 +349,10 @@ public class PdfService : IPdfService, IDisposable
                     // Fallback to PNG method if conversion fails
                     return ConvertSkiaBitmapToWpf(skBitmap);
                 }
-                return CreateWriteableBitmap(convertedBitmap);
+                return CreateWriteableBitmap(convertedBitmap, dpi);
             }
             
-            return CreateWriteableBitmap(skBitmap);
+            return CreateWriteableBitmap(skBitmap, dpi);
         }
         catch (Exception ex)
         {
@@ -347,12 +361,12 @@ public class PdfService : IPdfService, IDisposable
         }
     }
 
-    private static WriteableBitmap CreateWriteableBitmap(SKBitmap skBitmap)
+    private static WriteableBitmap CreateWriteableBitmap(SKBitmap skBitmap, double dpi = BaseWpfDpi)
     {
         var writeableBitmap = new WriteableBitmap(
             skBitmap.Width,
             skBitmap.Height,
-            96, 96,
+            dpi, dpi,
             PixelFormats.Bgra32,
             null);
 
@@ -409,6 +423,23 @@ public class PdfService : IPdfService, IDisposable
     public int GetPageRotation(int pageNumber)
     {
         return _pageRotations.TryGetValue(pageNumber, out int rotation) ? rotation : 0;
+    }
+
+    public void SetPageRotations(IReadOnlyDictionary<int, int> pageRotations)
+    {
+        _pageRotations.Clear();
+
+        foreach (var rotation in pageRotations)
+        {
+            int normalized = NormalizePdfRotation(rotation.Value);
+            if (normalized != 0)
+            {
+                _pageRotations[rotation.Key] = normalized;
+            }
+        }
+
+        _pageCache.Clear();
+        _thumbnailCache.Clear();
     }
 
     /// <summary>
@@ -481,14 +512,14 @@ public class PdfService : IPdfService, IDisposable
     /// <summary>
     /// Reorder pages in a PDF file
     /// </summary>
-    private bool ReorderPages(string sourceFile, string destFile, int[] pageOrder)
+    private bool ReorderPages(string sourceFile, string destFile, int[] pageOrder, byte[]? sourceBytes = null)
     {
         try
         {
             // Use in-memory bytes when possible to avoid file locking issues
-            bool useMemoryStream = sourceFile == _currentFilePath && _pdfBytes != null;
+            bool useMemoryStream = sourceBytes != null;
             
-            using var memStream = useMemoryStream ? new MemoryStream(_pdfBytes!, writable: false) : null;
+            using var memStream = useMemoryStream ? new MemoryStream(sourceBytes!, writable: false) : null;
             using var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile);
             using var writer = new PdfWriter(destFile);
             using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
@@ -516,14 +547,14 @@ public class PdfService : IPdfService, IDisposable
     /// <summary>
     /// Duplicate pages in a PDF file (each duplicated page is inserted after its original)
     /// </summary>
-    private bool DuplicatePages(string sourceFile, string destFile, List<int> pagesToDuplicate)
+    private bool DuplicatePages(string sourceFile, string destFile, List<int> pagesToDuplicate, byte[]? sourceBytes = null)
     {
         try
         {
             // Use in-memory bytes when possible to avoid file locking issues
-            bool useMemoryStream = sourceFile == _currentFilePath && _pdfBytes != null;
+            bool useMemoryStream = sourceBytes != null;
             
-            using var memStream = useMemoryStream ? new MemoryStream(_pdfBytes!, writable: false) : null;
+            using var memStream = useMemoryStream ? new MemoryStream(sourceBytes!, writable: false) : null;
             using var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile);
             using var writer = new PdfWriter(destFile);
             using var srcDoc = new iText.Kernel.Pdf.PdfDocument(reader);
@@ -558,481 +589,639 @@ public class PdfService : IPdfService, IDisposable
         }
     }
 
+    private readonly record struct PdfAnnotationBox(float Left, float Bottom, float Width, float Height)
+    {
+        public float Right => Left + Width;
+        public float Top => Bottom + Height;
+        public float CenterX => Left + Width / 2;
+        public float CenterY => Bottom + Height / 2;
+    }
+
+    private static float DipsToPdfPoints(double value) => (float)value * ScreenToPdf;
+
+    private static int NormalizePdfRotation(int rotation)
+    {
+        rotation %= 360;
+        if (rotation < 0) rotation += 360;
+        return rotation;
+    }
+
+    private static (float Width, float Height) GetDisplayPageSize(ITextRectangle mediaBox, int pageRotation)
+    {
+        int rotation = NormalizePdfRotation(pageRotation);
+        return rotation is 90 or 270
+            ? (mediaBox.GetHeight(), mediaBox.GetWidth())
+            : (mediaBox.GetWidth(), mediaBox.GetHeight());
+    }
+
+    private static void ApplyDisplayToPdfTransform(PdfCanvas canvas, ITextRectangle mediaBox, int pageRotation)
+    {
+        float x = mediaBox.GetX();
+        float y = mediaBox.GetY();
+        float width = mediaBox.GetWidth();
+        float height = mediaBox.GetHeight();
+
+        switch (NormalizePdfRotation(pageRotation))
+        {
+            case 90:
+                canvas.ConcatMatrix(0, 1, -1, 0, x + width, y);
+                break;
+            case 180:
+                canvas.ConcatMatrix(-1, 0, 0, -1, x + width, y + height);
+                break;
+            case 270:
+                canvas.ConcatMatrix(0, -1, 1, 0, x, y + height);
+                break;
+            default:
+                canvas.ConcatMatrix(1, 0, 0, 1, x, y);
+                break;
+        }
+    }
+
+    private static PdfAnnotationBox ToDisplayBoxFromTopLeft(
+        ITextRectangle mediaBox,
+        int pageRotation,
+        double xFromLeftDips,
+        double yFromTopDips,
+        float widthPoints,
+        float heightPoints)
+    {
+        var (_, displayHeight) = GetDisplayPageSize(mediaBox, pageRotation);
+        float left = DipsToPdfPoints(xFromLeftDips);
+        float bottom = displayHeight - DipsToPdfPoints(yFromTopDips) - heightPoints;
+        return new PdfAnnotationBox(left, bottom, widthPoints, heightPoints);
+    }
+
+    private static float ToDisplayX(double xFromLeftDips) => DipsToPdfPoints(xFromLeftDips);
+
+    private static float ToDisplayYFromTop(ITextRectangle mediaBox, int pageRotation, double yFromTopDips)
+    {
+        var (_, displayHeight) = GetDisplayPageSize(mediaBox, pageRotation);
+        return displayHeight - DipsToPdfPoints(yFromTopDips);
+    }
+
+    private static float GetAlignedTextX(
+        PdfAnnotationBox box,
+        float lineWidth,
+        float padding,
+        TextAlignment textAlignment)
+    {
+        return textAlignment switch
+        {
+            TextAlignment.Center => box.Left + (box.Width - lineWidth) / 2,
+            TextAlignment.Right => box.Right - padding - lineWidth,
+            _ => box.Left + padding
+        };
+    }
+
     public async Task<bool> SaveAsync(string filePath)
     {
-        if (_currentFilePath == null)
+        if (_currentFilePath == null && _basePdfBytes == null)
             return false;
 
         return await Task.Run(() =>
         {
             try
             {
-                string tempFile = IoPath.GetTempFileName();
-                string sourceFile = _currentFilePath;
+                bool hasStructuralChanges = _pageOrder != null || _duplicatedPages.Count > 0 ||
+                    _deletedPages.Count > 0 || _pageRotations.Count > 0 ||
+                    _redactions.Count > 0 || _movedTexts.Count > 0 || _movedImages.Count > 0;
 
-                // If page order has changed, create a reordered PDF first
-                if (_pageOrder != null && _pageOrder.Length > 0)
+                // ============================================================
+                // PHASE 1: Apply structural changes to base PDF
+                // (reorder, duplicate, delete, rotate, redactions, moved content)
+                // Result: intermediate PDF bytes WITHOUT user annotations
+                // ============================================================
+                byte[] intermediateBytes;
+
+                if (hasStructuralChanges)
                 {
-                    string reorderedFile = IoPath.GetTempFileName();
-                    if (ReorderPages(sourceFile, reorderedFile, _pageOrder))
-                    {
-                        sourceFile = reorderedFile;
-                    }
-                }
+                    string structuralTempFile = IoPath.GetTempFileName();
+                    string sourceFile = _currentFilePath ?? string.Empty;
 
-                // If pages need to be duplicated, handle that
-                if (_duplicatedPages.Count > 0)
-                {
-                    string duplicatedFile = IoPath.GetTempFileName();
-                    if (DuplicatePages(sourceFile, duplicatedFile, _duplicatedPages))
+                    // If page order has changed, create a reordered PDF first
+                    if (_pageOrder != null && _pageOrder.Length > 0)
                     {
-                        // Clean up previous temp file if it was created by reorder
-                        if (sourceFile != _currentFilePath && IoFile.Exists(sourceFile))
+                        string reorderedFile = IoPath.GetTempFileName();
+                        byte[]? reorderSourceBytes = sourceFile == _currentFilePath ? _basePdfBytes : null;
+                        if (ReorderPages(sourceFile, reorderedFile, _pageOrder, reorderSourceBytes))
                         {
-                            try { IoFile.Delete(sourceFile); } catch { }
-                        }
-                        sourceFile = duplicatedFile;
-                    }
-                }
-
-                // Use in-memory bytes when possible to avoid file locking issues
-                // Only use memory stream if sourceFile is still the original file (no reorder/duplication temp file)
-                bool useMemoryStream = sourceFile == _currentFilePath && _pdfBytes != null;
-                
-                using var memStream = useMemoryStream ? new MemoryStream(_pdfBytes!, writable: false) : null;
-                using (var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile))
-                using (var writer = new PdfWriter(tempFile))
-                using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
-                {
-                    // Apply deletions (in reverse order to maintain page numbers)
-                    var pagesToDelete = _deletedPages.OrderByDescending(p => p).ToList();
-                    foreach (var pageNum in pagesToDelete)
-                    {
-                        if (pageNum < pdfDoc.GetNumberOfPages())
-                        {
-                            pdfDoc.RemovePage(pageNum + 1); // iText uses 1-based indexing
+                            sourceFile = reorderedFile;
                         }
                     }
 
-                    // Apply rotations
-                    foreach (var rotation in _pageRotations)
+                    // If pages need to be duplicated, handle that
+                    if (_duplicatedPages.Count > 0)
                     {
-                        int adjustedPage = rotation.Key + 1;
-                        // Adjust for deleted pages
-                        foreach (var deleted in _deletedPages.Where(d => d < rotation.Key))
+                        string duplicatedFile = IoPath.GetTempFileName();
+                        byte[]? duplicateSourceBytes = sourceFile == _currentFilePath ? _basePdfBytes : null;
+                        if (DuplicatePages(sourceFile, duplicatedFile, _duplicatedPages, duplicateSourceBytes))
                         {
-                            adjustedPage--;
-                        }
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
-                        {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            int currentRotation = page.GetRotation();
-                            page.SetRotation((currentRotation + rotation.Value) % 360);
-                        }
-                    }
-
-                    // Apply redactions (white rectangles over deleted/modified content)
-                    foreach (var redaction in _redactions)
-                    {
-                        int adjustedPage = redaction.PageNumber + 1;
-                        foreach (var deleted in _deletedPages.Where(d => d < redaction.PageNumber))
-                        {
-                            adjustedPage--;
-                        }
-
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
-                        {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            var canvas = new PdfCanvas(page);
-
-                            // Draw white rectangle to cover content
-                            // Coordinates are already in PDF points
-                            canvas.SaveState()
-                                .SetFillColor(ColorConstants.WHITE)
-                                .Rectangle(redaction.X, redaction.Y, redaction.Width, redaction.Height)
-                                .Fill()
-                                .RestoreState();
-                        }
-                    }
-
-                    // Apply moved texts (extracted text with new positions)
-                    foreach (var movedText in _movedTexts)
-                    {
-                        int adjustedPage = movedText.PageNumber + 1;
-                        foreach (var deleted in _deletedPages.Where(d => d < movedText.PageNumber))
-                        {
-                            adjustedPage--;
-                        }
-
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
-                        {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            var mediaBox = page.GetMediaBox();
-                            var canvas = new PdfCanvas(page);
-
-                            // Get font
-                            PdfFont font = GetThaiCompatibleFont(movedText.FontName, false, false, movedText.Text);
-
-                            // Draw text at new position
-                            canvas.BeginText()
-                                .SetFontAndSize(font, movedText.FontSize > 0 ? movedText.FontSize : 12f)
-                                .SetFillColor(ColorConstants.BLACK)
-                                .MoveText(movedText.X, movedText.Y)
-                                .ShowText(movedText.Text)
-                                .EndText();
-                        }
-                    }
-
-                    // Apply moved images (extracted images with new positions)
-                    foreach (var movedImage in _movedImages)
-                    {
-                        int adjustedPage = movedImage.PageNumber + 1;
-                        foreach (var deleted in _deletedPages.Where(d => d < movedImage.PageNumber))
-                        {
-                            adjustedPage--;
-                        }
-
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages() && movedImage.ImageBytes.Length > 0)
-                        {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            var canvas = new PdfCanvas(page);
-
-                            try
+                            if (sourceFile != _currentFilePath && IoFile.Exists(sourceFile))
                             {
-                                var imageData = ImageDataFactory.Create(movedImage.ImageBytes);
-                                var pdfImage = new iText.Layout.Element.Image(imageData);
-
-                                // Add image using layout document for proper positioning
-                                using var layoutDoc = new iText.Layout.Document(pdfDoc);
-                                pdfImage.SetFixedPosition(adjustedPage, movedImage.X, movedImage.Y);
-                                pdfImage.ScaleToFit(movedImage.Width, movedImage.Height);
-                                layoutDoc.Add(pdfImage);
+                                try { IoFile.Delete(sourceFile); } catch { }
                             }
-                            catch (Exception ex)
+                            sourceFile = duplicatedFile;
+                        }
+                    }
+
+                    // Apply deletions, rotations, redactions, moved content
+                    bool useMemoryStream = sourceFile == _currentFilePath && _basePdfBytes != null;
+                    using var memStream = useMemoryStream ? new MemoryStream(_basePdfBytes!, writable: false) : null;
+                    using (var reader = useMemoryStream ? new PdfReader(memStream!) : new PdfReader(sourceFile))
+                    using (var writer = new PdfWriter(structuralTempFile))
+                    using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
+                    {
+                        // Apply deletions (in reverse order to maintain page numbers)
+                        var pagesToDelete = _deletedPages.OrderByDescending(p => p).ToList();
+                        foreach (var pageNum in pagesToDelete)
+                        {
+                            if (pageNum < pdfDoc.GetNumberOfPages())
                             {
-                                System.Diagnostics.Debug.WriteLine($"Error adding moved image: {ex.Message}");
+                                pdfDoc.RemovePage(pageNum + 1);
                             }
                         }
-                    }
 
-                    // Apply text annotations
-                    // Convert from screen pixels (96 DPI) to PDF points (72 DPI)
-                    const float SCREEN_TO_PDF = 72f / 96f; // 0.75
-
-                    foreach (var textAnn in _textAnnotations)
-                    {
-                        int adjustedPage = textAnn.PageNumber + 1;
-                        foreach (var deleted in _deletedPages.Where(d => d < textAnn.PageNumber))
+                        // Apply rotations
+                        foreach (var rotation in _pageRotations)
                         {
-                            adjustedPage--;
+                            int adjustedPage = rotation.Key + 1;
+                            foreach (var deleted in _deletedPages.Where(d => d < rotation.Key))
+                            {
+                                adjustedPage--;
+                            }
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
+                            {
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                int currentRotation = page.GetRotation();
+                                page.SetRotation((currentRotation + rotation.Value) % 360);
+                            }
                         }
 
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
+                        // Apply redactions (white rectangles over deleted/modified content)
+                        foreach (var redaction in _redactions)
                         {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            var mediaBox = page.GetMediaBox();
-
-                            // Create canvas directly on page
-                            var canvas = new PdfCanvas(page);
-
-                            // Get font - automatically uses Thai-compatible font when Thai text detected
-                            PdfFont font = GetThaiCompatibleFont(textAnn.FontFamily, textAnn.IsBold, textAnn.IsItalic, textAnn.Text);
-
-                            // COORDINATE CONVERSION:
-                            // WPF renders PDF at 96 DPI, PDF uses 72 DPI (points)
-                            // Screen coordinates (X, Y, Width, Height) need to be scaled by 72/96 = 0.75
-                            // Font size is stored in POINTS, so no conversion needed
-
-                            // Use MediaBox for accurate coordinate calculation (handles Y offset)
-                            float mediaBoxTop = mediaBox.GetY() + mediaBox.GetHeight();
-                            float mediaBoxLeft = mediaBox.GetX();
-
-                            float pdfX = (float)textAnn.X * SCREEN_TO_PDF + mediaBoxLeft;
-                            float pdfY = (float)textAnn.Y * SCREEN_TO_PDF;
-                            float pdfFontSize = textAnn.FontSize; // Already in points, no conversion
-                            float padding = 2f * SCREEN_TO_PDF;
-                            float borderWidthPdf = textAnn.BorderWidth * SCREEN_TO_PDF;
-
-                            // Calculate text width using PDF font metrics (needed for underline)
-                            float pdfTextWidth = font.GetWidth(textAnn.Text, pdfFontSize);
-
-                            // Box dimensions: use WPF-measured dimensions converted to PDF points
-                            // These match exactly what the user sees on screen for pixel-perfect positioning
-                            float boxWidth = (textAnn.Width > 0)
-                                ? (float)textAnn.Width * SCREEN_TO_PDF
-                                : pdfTextWidth + (padding * 2);
-                            float boxHeight = (textAnn.Height > 0)
-                                ? (float)textAnn.Height * SCREEN_TO_PDF
-                                : pdfFontSize * 1.2f + (padding * 2);
-
-                            // PDF Y coordinate: 0 is at bottom, use mediaBoxTop for correct positioning
-                            float boxX = pdfX;
-                            float boxY = mediaBoxTop - pdfY - boxHeight;
-
-                            // Text baseline: use actual font ascent for precise positioning
-                            // annotation.Y = top of text box from page top (in DIPs)
-                            // baseline = box_top - padding - ascent (in PDF coords, Y increases upward)
-                            float ascent;
-                            try
+                            int adjustedPage = redaction.PageNumber + 1;
+                            foreach (var deleted in _deletedPages.Where(d => d < redaction.PageNumber))
                             {
-                                var fontMetrics = font.GetFontProgram().GetFontMetrics();
-                                float ascenderUnits = fontMetrics.GetTypoAscender();
-                                ascent = ascenderUnits / 1000f * pdfFontSize;
-                                if (ascent <= 0) ascent = pdfFontSize * 0.75f;
+                                adjustedPage--;
                             }
-                            catch
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
                             {
-                                ascent = pdfFontSize * 0.75f; // Safe fallback
-                            }
-                            float textX = boxX + padding;
-                            float textY = mediaBoxTop - pdfY - padding - ascent;
-
-                            // For rotated text, apply rotation to background and border too
-                            bool hasRotation = Math.Abs(textAnn.Rotation) > 0.1;
-                            
-                            if (hasRotation)
-                            {
-                                // Calculate center of the text box for rotation
-                                float centerX = boxX + boxWidth / 2;
-                                float centerY = boxY + boxHeight / 2;
-                                
-                                // Convert rotation angle to radians (negative because PDF Y-axis is inverted)
-                                double angleRad = -textAnn.Rotation * Math.PI / 180;
-                                float cos = (float)Math.Cos(angleRad);
-                                float sin = (float)Math.Sin(angleRad);
-                                
-                                canvas.SaveState();
-                                // Translate to center, rotate, translate back
-                                canvas.ConcatMatrix(1, 0, 0, 1, centerX, centerY);
-                                canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
-                                canvas.ConcatMatrix(1, 0, 0, 1, -centerX, -centerY);
-                            }
-                            
-                            // Draw background if not transparent
-                            if (!string.IsNullOrEmpty(textAnn.BackgroundColor) && textAnn.BackgroundColor != "Transparent")
-                            {
-                                var bgColor = ParseColor(textAnn.BackgroundColor);
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                var canvas = new PdfCanvas(page);
                                 canvas.SaveState()
-                                    .SetFillColor(bgColor)
-                                    .Rectangle(boxX, boxY, boxWidth, boxHeight)
+                                    .SetFillColor(ColorConstants.WHITE)
+                                    .Rectangle(redaction.X, redaction.Y, redaction.Width, redaction.Height)
                                     .Fill()
                                     .RestoreState();
                             }
+                        }
 
-                            // Draw border if specified
-                            if (!string.IsNullOrEmpty(textAnn.BorderColor) && textAnn.BorderColor != "Transparent" && textAnn.BorderWidth > 0)
+                        // Apply moved texts (extracted text with new positions)
+                        foreach (var movedText in _movedTexts)
+                        {
+                            int adjustedPage = movedText.PageNumber + 1;
+                            foreach (var deleted in _deletedPages.Where(d => d < movedText.PageNumber))
                             {
-                                var strokeColor = ParseColor(textAnn.BorderColor);
-                                canvas.SaveState()
-                                    .SetStrokeColor(strokeColor)
-                                    .SetLineWidth(borderWidthPdf)
-                                    .Rectangle(boxX, boxY, boxWidth, boxHeight)
-                                    .Stroke()
-                                    .RestoreState();
+                                adjustedPage--;
                             }
-
-                            // Draw text (rotation already applied above if needed)
-                            var textColorParsed = ParseColor(textAnn.Color);
-                            
-                            canvas.BeginText()
-                                .SetFontAndSize(font, pdfFontSize)
-                                .SetFillColor(textColorParsed)
-                                .MoveText(textX, textY)
-                                .ShowText(textAnn.Text)
-                                .EndText();
-                            
-                            // Draw underline if specified
-                            if (textAnn.IsUnderline)
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
                             {
-                                canvas.SaveState()
-                                    .SetStrokeColor(textColorParsed)
-                                    .SetLineWidth(0.5f * SCREEN_TO_PDF)
-                                    .MoveTo(textX, textY - 1)
-                                    .LineTo(textX + pdfTextWidth, textY - 1)
-                                    .Stroke()
-                                    .RestoreState();
-                            }
-                            
-                            // Restore state if rotation was applied
-                            if (hasRotation)
-                            {
-                                canvas.RestoreState();
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                var canvas = new PdfCanvas(page);
+                                PdfFont font = GetThaiCompatibleFont(movedText.FontName, false, false, movedText.Text);
+                                canvas.BeginText()
+                                    .SetFontAndSize(font, movedText.FontSize > 0 ? movedText.FontSize : 12f)
+                                    .SetFillColor(ColorConstants.BLACK)
+                                    .MoveText(movedText.X, movedText.Y)
+                                    .ShowText(movedText.Text)
+                                    .EndText();
                             }
                         }
+
+                        // Apply moved images (extracted images with new positions)
+                        foreach (var movedImage in _movedImages)
+                        {
+                            int adjustedPage = movedImage.PageNumber + 1;
+                            foreach (var deleted in _deletedPages.Where(d => d < movedImage.PageNumber))
+                            {
+                                adjustedPage--;
+                            }
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages() && movedImage.ImageBytes.Length > 0)
+                            {
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                var canvas = new PdfCanvas(page);
+                                try
+                                {
+                                    var imageData = ImageDataFactory.Create(movedImage.ImageBytes);
+                                    canvas.AddImageWithTransformationMatrix(
+                                        imageData,
+                                        movedImage.Width,
+                                        0,
+                                        0,
+                                        movedImage.Height,
+                                        movedImage.X,
+                                        movedImage.Y,
+                                        false);
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Error adding moved image: {ex.Message}");
+                                }
+                            }
+                        }
+
+                        _pageCount = pdfDoc.GetNumberOfPages();
                     }
 
-                    // Apply image annotations
-                    foreach (var imgAnn in _imageAnnotations)
+                    // Read intermediate bytes (structural changes applied, no annotations)
+                    intermediateBytes = IoFile.ReadAllBytes(structuralTempFile);
+
+                    // Clean up temp files
+                    try { IoFile.Delete(structuralTempFile); } catch { }
+                    if (sourceFile != _currentFilePath && IoFile.Exists(sourceFile))
                     {
-                        int adjustedPage = imgAnn.PageNumber + 1;
-                        foreach (var deleted in _deletedPages.Where(d => d < imgAnn.PageNumber))
-                        {
-                            adjustedPage--;
-                        }
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages() && IoFile.Exists(imgAnn.ImagePath))
-                        {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            var mediaBox = page.GetMediaBox();
-
-                            // Use MediaBox for accurate coordinate calculation (handles Y offset)
-                            float mediaBoxTop = mediaBox.GetY() + mediaBox.GetHeight();
-                            float mediaBoxLeft = mediaBox.GetX();
-
-                            // Convert screen coordinates to PDF points
-                            // Both position and dimensions need conversion from 96 DPI to 72 DPI
-                            float pdfX = (float)imgAnn.X * SCREEN_TO_PDF + mediaBoxLeft;
-                            float pdfY = (float)imgAnn.Y * SCREEN_TO_PDF;
-                            float pdfWidth = (float)imgAnn.Width * SCREEN_TO_PDF;
-                            float pdfHeight = (float)imgAnn.Height * SCREEN_TO_PDF;
-
-                            var imageData = ImageDataFactory.Create(imgAnn.ImagePath);
-                            var canvas = new PdfCanvas(page);
-                            
-                            // Apply rotation if specified
-                            if (Math.Abs(imgAnn.Rotation) > 0.1)
-                            {
-                                // Calculate center of the image in PDF coordinates
-                                float centerX = pdfX + pdfWidth / 2;
-                                float centerY = mediaBoxTop - pdfY - pdfHeight / 2;
-                                
-                                // Convert rotation angle to radians (negative because PDF Y-axis is inverted)
-                                double angleRad = -imgAnn.Rotation * Math.PI / 180;
-                                float cos = (float)Math.Cos(angleRad);
-                                float sin = (float)Math.Sin(angleRad);
-                                
-                                // Apply rotation transform around center
-                                canvas.SaveState();
-                                // Translate to center, rotate, translate back
-                                canvas.ConcatMatrix(1, 0, 0, 1, centerX, centerY);
-                                canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
-                                canvas.ConcatMatrix(1, 0, 0, 1, -centerX, -centerY);
-                                
-                                canvas.AddImageFittedIntoRectangle(
-                                    imageData,
-                                    new ITextRectangle(
-                                        pdfX,
-                                        mediaBoxTop - pdfY - pdfHeight,
-                                        pdfWidth,
-                                        pdfHeight),
-                                    false);
-                                    
-                                canvas.RestoreState();
-                            }
-                            else
-                            {
-                                canvas.AddImageFittedIntoRectangle(
-                                    imageData,
-                                    new ITextRectangle(
-                                        pdfX,
-                                        mediaBoxTop - pdfY - pdfHeight,
-                                        pdfWidth,
-                                        pdfHeight),
-                                    false);
-                            }
-                        }
+                        try { IoFile.Delete(sourceFile); } catch { }
                     }
-
-                    // Apply shape annotations
-                    foreach (var shapeAnn in _shapeAnnotations)
-                    {
-                        int adjustedPage = shapeAnn.PageNumber + 1;
-                        foreach (var deleted in _deletedPages.Where(d => d < shapeAnn.PageNumber))
-                        {
-                            adjustedPage--;
-                        }
-                        if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
-                        {
-                            var page = pdfDoc.GetPage(adjustedPage);
-                            var mediaBox = page.GetMediaBox();
-                            var canvas = new PdfCanvas(page);
-
-                            // Use MediaBox for accurate coordinate calculation (handles Y offset)
-                            float mediaBoxTop = mediaBox.GetY() + mediaBox.GetHeight();
-                            float mediaBoxLeft = mediaBox.GetX();
-
-                            // Convert screen coordinates to PDF points
-                            // Both position and dimensions need conversion from 96 DPI to 72 DPI
-                            float pdfX = (float)shapeAnn.X * SCREEN_TO_PDF + mediaBoxLeft;
-                            float pdfY = (float)shapeAnn.Y * SCREEN_TO_PDF;
-                            float pdfWidth = (float)shapeAnn.Width * SCREEN_TO_PDF;
-                            float pdfHeight = (float)shapeAnn.Height * SCREEN_TO_PDF;
-                            float pdfStrokeWidth = shapeAnn.StrokeWidth * SCREEN_TO_PDF;
-
-                            // PDF Y coordinate conversion using mediaBoxTop
-                            float y = mediaBoxTop - pdfY - pdfHeight;
-                            
-                            canvas.SaveState();
-                            
-                            // Set fill color if not transparent
-                            bool hasFill = !string.IsNullOrEmpty(shapeAnn.FillColor) && shapeAnn.FillColor != "Transparent";
-                            if (hasFill)
-                            {
-                                canvas.SetFillColor(ParseColor(shapeAnn.FillColor));
-                            }
-                            
-                            // Set stroke color
-                            canvas.SetStrokeColor(ParseColor(shapeAnn.StrokeColor));
-                            canvas.SetLineWidth(pdfStrokeWidth);
-                            
-                            switch (shapeAnn.ShapeType)
-                            {
-                                case ShapeType.Rectangle:
-                                    canvas.Rectangle(pdfX, y, pdfWidth, pdfHeight);
-                                    if (hasFill) canvas.FillStroke();
-                                    else canvas.Stroke();
-                                    break;
-                                    
-                                case ShapeType.Ellipse:
-                                    canvas.Ellipse(pdfX, y, pdfX + pdfWidth, y + pdfHeight);
-                                    if (hasFill) canvas.FillStroke();
-                                    else canvas.Stroke();
-                                    break;
-                                    
-                                case ShapeType.Line:
-                                    float pdfX2 = (float)shapeAnn.X2 * SCREEN_TO_PDF + mediaBoxLeft;
-                                    float pdfY2 = (float)shapeAnn.Y2 * SCREEN_TO_PDF;
-                                    float y1 = mediaBoxTop - pdfY;
-                                    float y2 = mediaBoxTop - pdfY2;
-                                    canvas.MoveTo(pdfX, y1);
-                                    canvas.LineTo(pdfX2, y2);
-                                    canvas.Stroke();
-                                    break;
-                            }
-                            
-                            canvas.RestoreState();
-                        }
-                    }
-                    
-                    _pageCount = pdfDoc.GetNumberOfPages();
                 }
-
-                // Move temp file to target
-                if (IoFile.Exists(filePath))
-                    IoFile.Delete(filePath);
-                IoFile.Move(tempFile, filePath);
-
-                _currentFilePath = filePath;
-                
-                // Clean up temporary reordered file if created
-                if (sourceFile != _currentFilePath && IoFile.Exists(sourceFile))
+                else
                 {
-                    try { IoFile.Delete(sourceFile); } catch { }
+                    // No structural changes - use base bytes as-is
+                    intermediateBytes = _basePdfBytes ?? _pdfBytes ?? throw new InvalidOperationException("No PDF bytes available");
                 }
 
-                // Clear modifications
-                _textAnnotations.Clear();
-                _imageAnnotations.Clear();
-                _shapeAnnotations.Clear();
+                // ============================================================
+                // PHASE 2: Apply user annotations on top of intermediate PDF
+                // (text, image, shape annotations)
+                // Result: final PDF with everything baked in for external viewers
+                // ============================================================
+                bool hasAnnotations = _textAnnotations.Count > 0 || _imageAnnotations.Count > 0 || _shapeAnnotations.Count > 0;
+
+                if (hasAnnotations)
+                {
+                    string annotatedTempFile = IoPath.GetTempFileName();
+                    using (var intermediateStream = new MemoryStream(intermediateBytes, writable: false))
+                    using (var reader = new PdfReader(intermediateStream))
+                    using (var writer = new PdfWriter(annotatedTempFile))
+                    using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
+                    {
+                        // Apply text annotations
+                        foreach (var textAnn in _textAnnotations)
+                        {
+                            int adjustedPage = textAnn.PageNumber + 1;
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
+                            {
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                var mediaBox = page.GetMediaBox();
+                                int pageRotation = page.GetRotation();
+                                var canvas = new PdfCanvas(page);
+                                PdfFont font = GetThaiCompatibleFont(textAnn.FontFamily, textAnn.IsBold, textAnn.IsItalic, textAnn.Text);
+
+                                float pdfFontSize = textAnn.FontSize;
+                                float padding = DipsToPdfPoints(2);
+                                float borderWidthPdf = DipsToPdfPoints(textAnn.BorderWidth);
+
+                                float pdfTextWidth = font.GetWidth(textAnn.Text, pdfFontSize);
+
+                                float boxWidth = (textAnn.Width > 0)
+                                    ? DipsToPdfPoints(textAnn.Width)
+                                    : pdfTextWidth + (padding * 2);
+                                float boxHeight = (textAnn.Height > 0)
+                                    ? DipsToPdfPoints(textAnn.Height)
+                                    : pdfFontSize * 1.2f + (padding * 2);
+
+                                var box = ToDisplayBoxFromTopLeft(mediaBox, pageRotation, textAnn.X, textAnn.Y, boxWidth, boxHeight);
+
+                                // Text baseline positioning:
+                                // Use WPF-measured BaselineOffset for pixel-perfect match
+                                float baselineFromTop;
+                                if (textAnn.BaselineOffset > 0)
+                                {
+                                    baselineFromTop = DipsToPdfPoints(textAnn.BaselineOffset);
+                                }
+                                else
+                                {
+                                    try
+                                    {
+                                        var fontProgram = font.GetFontProgram();
+                                        var fontMetrics = fontProgram.GetFontMetrics();
+                                        float ascenderUnits = fontMetrics.GetTypoAscender();
+                                        float unitsPerEm = fontMetrics.GetUnitsPerEm();
+                                        if (unitsPerEm <= 0) unitsPerEm = 1000f;
+                                        baselineFromTop = ascenderUnits / unitsPerEm * pdfFontSize;
+                                        if (baselineFromTop <= 0 || baselineFromTop > pdfFontSize * 1.5f)
+                                            baselineFromTop = pdfFontSize * 0.8f;
+                                    }
+                                    catch
+                                    {
+                                        baselineFromTop = pdfFontSize * 0.8f;
+                                    }
+                                }
+                                float textY = box.Top - padding - baselineFromTop;
+
+                                bool hasRotation = Math.Abs(textAnn.Rotation) > 0.1;
+                                canvas.SaveState();
+                                ApplyDisplayToPdfTransform(canvas, mediaBox, pageRotation);
+                                if (hasRotation)
+                                {
+                                    float centerX = box.CenterX;
+                                    float centerY = box.CenterY;
+                                    double angleRad = -textAnn.Rotation * Math.PI / 180;
+                                    float cos = (float)Math.Cos(angleRad);
+                                    float sin = (float)Math.Sin(angleRad);
+                                    canvas.SaveState();
+                                    canvas.ConcatMatrix(1, 0, 0, 1, centerX, centerY);
+                                    canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
+                                    canvas.ConcatMatrix(1, 0, 0, 1, -centerX, -centerY);
+                                }
+
+                                if (!string.IsNullOrEmpty(textAnn.BackgroundColor) && textAnn.BackgroundColor != "Transparent")
+                                {
+                                    var bgColor = ParseColor(textAnn.BackgroundColor);
+                                    canvas.SaveState()
+                                        .SetFillColor(bgColor)
+                                        .Rectangle(box.Left, box.Bottom, box.Width, box.Height)
+                                        .Fill()
+                                        .RestoreState();
+                                }
+
+                                if (!string.IsNullOrEmpty(textAnn.BorderColor) && textAnn.BorderColor != "Transparent" && textAnn.BorderWidth > 0)
+                                {
+                                    var strokeColor = ParseColor(textAnn.BorderColor);
+                                    canvas.SaveState()
+                                        .SetStrokeColor(strokeColor)
+                                        .SetLineWidth(borderWidthPdf)
+                                        .Rectangle(box.Left, box.Bottom, box.Width, box.Height)
+                                        .Stroke()
+                                        .RestoreState();
+                                }
+
+                                var textColorParsed = ParseColor(textAnn.Color);
+                                float lineHeight = pdfFontSize * 1.2f;
+                                string[] textLines = textAnn.Text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+                                for (int lineIdx = 0; lineIdx < textLines.Length; lineIdx++)
+                                {
+                                    float lineWidth = font.GetWidth(textLines[lineIdx], pdfFontSize);
+                                    float textX = GetAlignedTextX(box, lineWidth, padding, textAnn.TextAlignment);
+                                    float lineY = textY - (lineIdx * lineHeight);
+                                    canvas.BeginText()
+                                        .SetFontAndSize(font, pdfFontSize)
+                                        .SetFillColor(textColorParsed)
+                                        .MoveText(textX, lineY)
+                                        .ShowText(textLines[lineIdx])
+                                        .EndText();
+                                }
+
+                                if (textAnn.IsUnderline)
+                                {
+                                    for (int lineIdx = 0; lineIdx < textLines.Length; lineIdx++)
+                                    {
+                                        float lineWidth = font.GetWidth(textLines[lineIdx], pdfFontSize);
+                                        float textX = GetAlignedTextX(box, lineWidth, padding, textAnn.TextAlignment);
+                                        float lineY = textY - (lineIdx * lineHeight);
+                                        canvas.SaveState()
+                                            .SetStrokeColor(textColorParsed)
+                                            .SetLineWidth(DipsToPdfPoints(0.5))
+                                            .MoveTo(textX, lineY - 1)
+                                            .LineTo(textX + lineWidth, lineY - 1)
+                                            .Stroke()
+                                            .RestoreState();
+                                    }
+                                }
+
+                                if (hasRotation)
+                                {
+                                    canvas.RestoreState();
+                                }
+                                canvas.RestoreState();
+                            }
+                        }
+
+                        // Apply image annotations
+                        foreach (var imgAnn in _imageAnnotations)
+                        {
+                            int adjustedPage = imgAnn.PageNumber + 1;
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages() && IoFile.Exists(imgAnn.ImagePath))
+                            {
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                var mediaBox = page.GetMediaBox();
+                                int pageRotation = page.GetRotation();
+                                var box = ToDisplayBoxFromTopLeft(
+                                    mediaBox,
+                                    pageRotation,
+                                    imgAnn.X,
+                                    imgAnn.Y,
+                                    DipsToPdfPoints(imgAnn.Width),
+                                    DipsToPdfPoints(imgAnn.Height));
+
+                                var imageData = ImageDataFactory.Create(imgAnn.ImagePath);
+                                var canvas = new PdfCanvas(page);
+                                canvas.SaveState();
+                                ApplyDisplayToPdfTransform(canvas, mediaBox, pageRotation);
+
+                                if (Math.Abs(imgAnn.Rotation) > 0.1)
+                                {
+                                    float centerX = box.CenterX;
+                                    float centerY = box.CenterY;
+                                    double angleRad = -imgAnn.Rotation * Math.PI / 180;
+                                    float cos = (float)Math.Cos(angleRad);
+                                    float sin = (float)Math.Sin(angleRad);
+                                    canvas.SaveState();
+                                    canvas.ConcatMatrix(1, 0, 0, 1, centerX, centerY);
+                                    canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
+                                    canvas.ConcatMatrix(1, 0, 0, 1, -centerX, -centerY);
+                                    canvas.AddImageWithTransformationMatrix(imageData,
+                                        box.Width, 0, 0, box.Height, box.Left, box.Bottom, false);
+                                    canvas.RestoreState();
+                                }
+                                else
+                                {
+                                    canvas.AddImageWithTransformationMatrix(imageData,
+                                        box.Width, 0, 0, box.Height, box.Left, box.Bottom, false);
+                                }
+                                canvas.RestoreState();
+                            }
+                        }
+
+                        // Apply shape annotations
+                        foreach (var shapeAnn in _shapeAnnotations)
+                        {
+                            int adjustedPage = shapeAnn.PageNumber + 1;
+                            if (adjustedPage > 0 && adjustedPage <= pdfDoc.GetNumberOfPages())
+                            {
+                                var page = pdfDoc.GetPage(adjustedPage);
+                                var mediaBox = page.GetMediaBox();
+                                var canvas = new PdfCanvas(page);
+                                int pageRotation = page.GetRotation();
+                                var box = ToDisplayBoxFromTopLeft(
+                                    mediaBox,
+                                    pageRotation,
+                                    shapeAnn.X,
+                                    shapeAnn.Y,
+                                    DipsToPdfPoints(shapeAnn.Width),
+                                    DipsToPdfPoints(shapeAnn.Height));
+                                float pdfStrokeWidth = DipsToPdfPoints(shapeAnn.StrokeWidth);
+                                bool hasRotation = Math.Abs(shapeAnn.Rotation) > 0.1;
+                                float rotationCenterX = box.CenterX;
+                                float rotationCenterY = box.CenterY;
+
+                                canvas.SaveState();
+                                ApplyDisplayToPdfTransform(canvas, mediaBox, pageRotation);
+                                bool hasFill = !string.IsNullOrEmpty(shapeAnn.FillColor) && shapeAnn.FillColor != "Transparent";
+                                if (hasFill) canvas.SetFillColor(ParseColor(shapeAnn.FillColor));
+                                canvas.SetStrokeColor(ParseColor(shapeAnn.StrokeColor));
+                                canvas.SetLineWidth(pdfStrokeWidth);
+
+                                if (shapeAnn.ShapeType == ShapeType.Line)
+                                {
+                                    float lineX1 = ToDisplayX(shapeAnn.X);
+                                    float lineY1 = ToDisplayYFromTop(mediaBox, pageRotation, shapeAnn.Y);
+                                    float lineX2 = ToDisplayX(shapeAnn.X2);
+                                    float lineY2 = ToDisplayYFromTop(mediaBox, pageRotation, shapeAnn.Y2);
+                                    rotationCenterX = (lineX1 + lineX2) / 2;
+                                    rotationCenterY = (lineY1 + lineY2) / 2;
+                                }
+
+                                if (hasRotation)
+                                {
+                                    double angleRad = -shapeAnn.Rotation * Math.PI / 180;
+                                    float cos = (float)Math.Cos(angleRad);
+                                    float sin = (float)Math.Sin(angleRad);
+                                    canvas.ConcatMatrix(1, 0, 0, 1, rotationCenterX, rotationCenterY);
+                                    canvas.ConcatMatrix(cos, sin, -sin, cos, 0, 0);
+                                    canvas.ConcatMatrix(1, 0, 0, 1, -rotationCenterX, -rotationCenterY);
+                                }
+
+                                switch (shapeAnn.ShapeType)
+                                {
+                                    case ShapeType.Rectangle:
+                                        canvas.Rectangle(box.Left, box.Bottom, box.Width, box.Height);
+                                        if (hasFill) canvas.FillStroke(); else canvas.Stroke();
+                                        break;
+                                    case ShapeType.Ellipse:
+                                        canvas.Ellipse(box.Left, box.Bottom, box.Right, box.Top);
+                                        if (hasFill) canvas.FillStroke(); else canvas.Stroke();
+                                        break;
+                                    case ShapeType.Line:
+                                        float pdfX2 = ToDisplayX(shapeAnn.X2);
+                                        float y1 = ToDisplayYFromTop(mediaBox, pageRotation, shapeAnn.Y);
+                                        float y2 = ToDisplayYFromTop(mediaBox, pageRotation, shapeAnn.Y2);
+                                        canvas.MoveTo(box.Left, y1);
+                                        canvas.LineTo(pdfX2, y2);
+                                        canvas.Stroke();
+                                        break;
+                                }
+                                canvas.RestoreState();
+                            }
+                        }
+
+                        _pageCount = pdfDoc.GetNumberOfPages();
+                    }
+
+                    // Write annotated file to target
+                    if (IoFile.Exists(filePath))
+                        IoFile.Delete(filePath);
+                    IoFile.Move(annotatedTempFile, filePath);
+                }
+                else
+                {
+                    // No annotations - write intermediate directly
+                    if (IoFile.Exists(filePath))
+                        IoFile.Delete(filePath);
+                    IoFile.WriteAllBytes(filePath, intermediateBytes);
+
+                    // Update page count from intermediate bytes
+                    using var countStream = new MemoryStream(intermediateBytes, writable: false);
+                    using var countReader = new PdfReader(countStream);
+                    using var countDoc = new iText.Kernel.Pdf.PdfDocument(countReader);
+                    _pageCount = countDoc.GetNumberOfPages();
+                }
+
+                // ============================================================
+                // PHASE 3: Update internal state to the actual saved file.
+                // Annotations are now baked into filePath, so stale overlay
+                // lists must be cleared to prevent accidental double-save.
+                // ============================================================
+                _pdfBytes = IoFile.ReadAllBytes(filePath);
+                _basePdfBytes = (byte[])_pdfBytes.Clone();
+                _currentFilePath = filePath;
+
+                // Clear structural modifications (consumed by Phase 1)
                 _pageRotations.Clear();
                 _deletedPages.Clear();
                 _duplicatedPages.Clear();
                 _pageOrder = null;
+                _redactions.Clear();
+                _movedTexts.Clear();
+                _movedImages.Clear();
+
+                _textAnnotations.Clear();
+                _imageAnnotations.Clear();
+                _shapeAnnotations.Clear();
+
+                // Clear render caches (page images need re-rendering from new base)
+                _pageCache.Clear();
+                _thumbnailCache.Clear();
+
+                System.Diagnostics.Debug.WriteLine($"[SAVE] Saved successfully. Bytes={_pdfBytes.Length / 1024}KB, annotations cleared after baking.");
 
                 return true;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error saving PDF: {ex.Message}");
+                return false;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Reload PDF bytes from the saved file and clear transient annotation lists.
+    /// This ensures rendered pages match the saved file (including baked annotations).
+    /// </summary>
+    public async Task<bool> ReloadBytesFromFileAsync(string filePath)
+    {
+        return await Task.Run(() =>
+        {
+            try
+            {
+                if (!IoFile.Exists(filePath)) return false;
+
+                _pdfBytes = IoFile.ReadAllBytes(filePath);
+                _basePdfBytes = (byte[])_pdfBytes.Clone();
+                _currentFilePath = filePath;
+
+                // Update page count
+                using var memStream = new MemoryStream(_pdfBytes, writable: false);
+                using var reader = new PdfReader(memStream);
+                using var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader);
+                _pageCount = pdfDoc.GetNumberOfPages();
+
+                // Clear caches so pages re-render from new bytes
+                _pageCache.Clear();
+                _thumbnailCache.Clear();
+
+                // Clear structural state (already applied and saved)
+                _pageRotations.Clear();
+                _deletedPages.Clear();
+                _duplicatedPages.Clear();
+                _redactions.Clear();
+                _movedTexts.Clear();
+                _movedImages.Clear();
+                _pageOrder = null;
+
+                _textAnnotations.Clear();
+                _imageAnnotations.Clear();
+                _shapeAnnotations.Clear();
+
+                System.Diagnostics.Debug.WriteLine($"[RELOAD] Reloaded from file: {_pdfBytes.Length / 1024}KB, {_pageCount} pages, annotations cleared");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error reloading PDF bytes: {ex.Message}");
                 return false;
             }
         });
@@ -1635,6 +1824,74 @@ public class PdfService : IPdfService, IDisposable
         });
     }
 
+    public async Task<bool> ImportPdfPagesAsync(string[] inputFiles, int insertIndex)
+    {
+        if (_pdfBytes == null && _basePdfBytes == null)
+            return false;
+
+        return await Task.Run(() =>
+        {
+            try
+            {
+                var sourceBytes = _basePdfBytes ?? _pdfBytes!;
+                using var sourceStream = new MemoryStream(sourceBytes, writable: false);
+                using var reader = new PdfReader(sourceStream);
+                using var outputStream = new MemoryStream();
+                using (var writer = new PdfWriter(outputStream))
+                using (var destDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
+                {
+                    int currentPageCount = destDoc.GetNumberOfPages();
+                    int insertionPoint = Math.Clamp(insertIndex, 0, currentPageCount);
+
+                    foreach (var file in inputFiles.Where(IoFile.Exists))
+                    {
+                        using var importReader = new PdfReader(file);
+                        using var importDoc = new iText.Kernel.Pdf.PdfDocument(importReader);
+                        int importPageCount = importDoc.GetNumberOfPages();
+                        if (importPageCount == 0)
+                            continue;
+
+                        if (insertionPoint >= destDoc.GetNumberOfPages())
+                        {
+                            importDoc.CopyPagesTo(1, importPageCount, destDoc);
+                        }
+                        else
+                        {
+                            importDoc.CopyPagesTo(1, importPageCount, destDoc, insertionPoint + 1);
+                        }
+
+                        insertionPoint += importPageCount;
+                    }
+
+                    _pageCount = destDoc.GetNumberOfPages();
+                }
+
+                _pdfBytes = outputStream.ToArray();
+                _basePdfBytes = (byte[])_pdfBytes.Clone();
+
+                _pageRotations.Clear();
+                _deletedPages.Clear();
+                _duplicatedPages.Clear();
+                _pageOrder = null;
+                _redactions.Clear();
+                _movedTexts.Clear();
+                _movedImages.Clear();
+                _textAnnotations.Clear();
+                _imageAnnotations.Clear();
+                _shapeAnnotations.Clear();
+                _pageCache.Clear();
+                _thumbnailCache.Clear();
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error importing PDF pages: {ex.Message}");
+                return false;
+            }
+        });
+    }
+
     public async Task<bool> SplitPdfAsync(string inputFile, string outputFolder)
     {
         return await Task.Run(() =>
@@ -1879,7 +2136,7 @@ public class PdfService : IPdfService, IDisposable
                     // Center image vertically on the baseline
                     float drawY = y - (imgHeight / 2f);
                     
-                    canvas.AddImageFittedIntoRectangle(imageData, new ITextRectangle(drawX, drawY, imgWidth, imgHeight), false);
+                    canvas.AddImageWithTransformationMatrix(imageData, imgWidth, 0, 0, imgHeight, drawX, drawY, false);
                     drewImage = true;
                     System.Diagnostics.Debug.WriteLine($"Drew image at ({drawX}, {drawY})");
                 }
@@ -2018,10 +2275,6 @@ public class PdfService : IPdfService, IDisposable
                 // Split text by newlines
                 string[] lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
                 
-                canvas.BeginText()
-                    .SetFontAndSize(font, fontSize)
-                    .SetFillColor(textColor);
-                
                 for (int i = 0; i < lines.Length; i++)
                 {
                     float lineY = topY - (i * lineHeight);
@@ -2029,17 +2282,13 @@ public class PdfService : IPdfService, IDisposable
                     // Stop if we're below the box
                     if (lineY < y + padding) break;
                     
-                    canvas.MoveText(textX, lineY)
-                        .ShowText(lines[i]);
-                    
-                    // Reset position for next line (MoveText is relative after first call)
-                    if (i < lines.Length - 1)
-                    {
-                        canvas.MoveText(-textX, -lineY);
-                    }
+                    canvas.BeginText()
+                        .SetFontAndSize(font, fontSize)
+                        .SetFillColor(textColor)
+                        .MoveText(textX, lineY)
+                        .ShowText(lines[i])
+                        .EndText();
                 }
-                
-                canvas.EndText();
             }
             
             // Restore state if rotation was applied
@@ -2107,8 +2356,8 @@ public class PdfService : IPdfService, IDisposable
                 canvas.ConcatMatrix(cos, sin, -sin, cos, tx, ty);
             }
             
-            // Draw the image
-            canvas.AddImageFittedIntoRectangle(imageData, new ITextRectangle(x, y, width, height), false);
+            // Draw the image using exact fill semantics to match WPF Stretch.Fill preview.
+            canvas.AddImageWithTransformationMatrix(imageData, width, 0, 0, height, x, y, false);
             
             canvas.RestoreState();
             
@@ -2198,6 +2447,7 @@ public class PdfService : IPdfService, IDisposable
         _currentFilePath = null;
         _pageCount = 0;
         _pdfBytes = null;
+        _basePdfBytes = null;
         _pageCache.Clear();
         _thumbnailCache.Clear();
     }

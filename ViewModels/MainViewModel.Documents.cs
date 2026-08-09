@@ -53,8 +53,11 @@ public partial class MainViewModel
         // Update old document state
         if (oldValue != null)
         {
+            SyncToDocument(oldValue);
             oldValue.IsActive = false;
         }
+
+        ResetContentExtractionOnFileChange();
 
         // Update new document state
         if (newValue != null)
@@ -72,12 +75,14 @@ public partial class MainViewModel
             PageThumbnails.Clear();
             PageImages.Clear();
             Annotations.Clear();
+            HeaderFooterConfig = null;
             CurrentPageImage = null;
         }
 
         // Notify property changes
         OnPropertyChanged(nameof(HasMultipleDocuments));
         OnPropertyChanged(nameof(HasOpenDocuments));
+        OnPropertyChanged(nameof(HasHeaderFooter));
         OnPropertyChanged(nameof(WindowTitle));
 
         // Refresh canvas
@@ -115,6 +120,13 @@ public partial class MainViewModel
             IsFileLoaded = ActiveDocument.IsFileLoaded;
             FilePath = ActiveDocument.FilePath;
             TotalPages = ActiveDocument.TotalPages;
+            HeaderFooterConfig = ActiveDocument.HeaderFooterConfig;
+            _pageRotations.Clear();
+            foreach (var rotation in ActiveDocument.GetPageRotations())
+            {
+                _pageRotations[rotation.Key] = rotation.Value;
+            }
+            SyncPageRotationsToService();
 
             // 4. Sync current page image directly (avoid re-rendering)
             CurrentPageImage = ActiveDocument.CurrentPageImage;
@@ -133,6 +145,7 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(SelectedThumbnails));
         OnPropertyChanged(nameof(SelectedPagesCount));
         OnPropertyChanged(nameof(HasMultipleSelection));
+        OnPropertyChanged(nameof(HasHeaderFooter));
     }
 
     /// <summary>
@@ -142,12 +155,19 @@ public partial class MainViewModel
     {
         if (ActiveDocument == null) return;
 
-        ActiveDocument.CurrentPageIndex = CurrentPageIndex;
-        ActiveDocument.ZoomScale = ZoomScale;
-        ActiveDocument.ZoomLevel = ZoomLevel;
-        ActiveDocument.CurrentPageImage = CurrentPageImage;
-        ActiveDocument.SelectedThumbnail = SelectedThumbnail;
-        ActiveDocument.SelectedAnnotation = SelectedAnnotation;
+        SyncToDocument(ActiveDocument);
+    }
+
+    private void SyncToDocument(DocumentTab document)
+    {
+        document.CurrentPageIndex = CurrentPageIndex;
+        document.ZoomScale = ZoomScale;
+        document.ZoomLevel = ZoomLevel;
+        document.CurrentPageImage = CurrentPageImage;
+        document.SelectedThumbnail = SelectedThumbnail;
+        document.SelectedAnnotation = SelectedAnnotation;
+        document.HeaderFooterConfig = HeaderFooterConfig;
+        document.SetPageRotations(_pageRotations);
     }
 
     #endregion

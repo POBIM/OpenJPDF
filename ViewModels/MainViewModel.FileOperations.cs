@@ -216,7 +216,7 @@ public partial class MainViewModel
         var placeholders = new List<PageImage>();
         for (int i = 0; i < tab.TotalPages; i++)
         {
-            placeholders.Add(new PageImage(i, null)); // Placeholder
+            placeholders.Add(CreatePageImagePlaceholder(tab, i));
         }
         
         // Add all placeholders at once (single UI update)
@@ -231,7 +231,7 @@ public partial class MainViewModel
         System.Diagnostics.Debug.WriteLine($"[PERF] Created {tab.TotalPages} page placeholders in {sw.ElapsedMilliseconds}ms");
 
         // Phase 2: Load only the current page and nearby pages
-        await LoadVisiblePagesAsync(tab, tab.CurrentPageIndex, windowSize: 2);
+        await LoadVisiblePagesAsync(tab, tab.CurrentPageIndex, windowSize: 12);
         
         System.Diagnostics.Debug.WriteLine($"[PERF] Initial page load completed in {sw.ElapsedMilliseconds}ms");
     }
@@ -272,6 +272,7 @@ public partial class MainViewModel
                 {
                     if (pageIdx < tab.PageImages.Count)
                     {
+                        UpdatePageImageDisplaySize(tab, tab.PageImages[pageIdx], pageIdx);
                         tab.PageImages[pageIdx].UpdateImage(image);
                         
                         // Update current page image if this is the current page
@@ -291,7 +292,7 @@ public partial class MainViewModel
     public async Task PreloadNearbyPagesAsync(int centerPage)
     {
         if (ActiveDocument == null) return;
-        await LoadVisiblePagesAsync(ActiveDocument, centerPage, windowSize: 3);
+        await LoadVisiblePagesAsync(ActiveDocument, centerPage, windowSize: IsScrollablePageView ? 12 : 3);
     }
 
     private void LoadCurrentPage()
@@ -319,6 +320,10 @@ public partial class MainViewModel
         // Also update the page in continuous scroll view
         if (CurrentPageIndex >= 0 && CurrentPageIndex < pageImages.Count)
         {
+            if (ActiveDocument != null)
+            {
+                UpdatePageImageDisplaySize(ActiveDocument, pageImages[CurrentPageIndex], CurrentPageIndex);
+            }
             pageImages[CurrentPageIndex].UpdateImage(CurrentPageImage);
         }
         
@@ -344,7 +349,9 @@ public partial class MainViewModel
         var placeholders = new List<PageImage>();
         for (int i = 0; i < TotalPages; i++)
         {
-            placeholders.Add(new PageImage(i, null));
+            var placeholder = new PageImage(i, null);
+            UpdatePageImageDisplaySize(placeholder, i);
+            placeholders.Add(placeholder);
         }
         
         // Batch add all placeholders
@@ -395,6 +402,8 @@ public partial class MainViewModel
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         float scale = (float)ZoomScale;
         
+        UpdateAllPageDisplaySizes();
+
         // Clear page cache since zoom changed (thumbnail cache remains valid)
         if (pdfService is PdfService ps)
         {
@@ -407,9 +416,9 @@ public partial class MainViewModel
             PageImages[i].UpdateImage(null);
         }
 
-        // Reload only current page and nearby pages
+        // Reload current page and a wider window for multi-page view modes.
         int currentPage = CurrentPageIndex;
-        int windowSize = 2;
+        int windowSize = IsScrollablePageView ? 12 : 2;
         int startPage = Math.Max(0, currentPage - windowSize);
         int endPage = Math.Min(PageImages.Count - 1, currentPage + windowSize);
 
@@ -419,12 +428,19 @@ public partial class MainViewModel
             {
                 int pageIndex = i;
                 int rotation = GetPageRotation(pageIndex);
-                var image = pdfService.GetPageImage(pageIndex, scale, rotation);
+                int originalPageIndex = pageIndex;
+                if (pageIndex >= 0 && pageIndex < PageThumbnails.Count)
+                {
+                    originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
+                }
+
+                var image = pdfService.GetPageImage(originalPageIndex, scale, rotation);
                 
                 Application.Current?.Dispatcher.Invoke(() =>
                 {
                     if (pageIndex < PageImages.Count)
                     {
+                        UpdatePageImageDisplaySize(PageImages[pageIndex], pageIndex);
                         PageImages[pageIndex].UpdateImage(image);
                     }
                 });
@@ -437,6 +453,83 @@ public partial class MainViewModel
         }
         
         System.Diagnostics.Debug.WriteLine($"[PERF] Reloaded {endPage - startPage + 1} pages after zoom change");
+    }
+
+    private PageImage CreatePageImagePlaceholder(DocumentTab tab, int pageIndex)
+    {
+        var pageImage = new PageImage(pageIndex, null);
+        UpdatePageImageDisplaySize(tab, pageImage, pageIndex);
+        return pageImage;
+    }
+
+    private void UpdateAllPageDisplaySizes()
+    {
+        if (ActiveDocument != null)
+        {
+            for (int i = 0; i < ActiveDocument.PageImages.Count; i++)
+            {
+                UpdatePageImageDisplaySize(ActiveDocument, ActiveDocument.PageImages[i], i);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < PageImages.Count; i++)
+            {
+                UpdatePageImageDisplaySize(PageImages[i], i);
+            }
+        }
+    }
+
+    private void UpdatePageImageDisplaySize(DocumentTab tab, PageImage pageImage, int pageIndex)
+    {
+        int originalPageIndex = pageIndex;
+        if (pageIndex >= 0 && pageIndex < tab.PageThumbnails.Count)
+        {
+            originalPageIndex = tab.PageThumbnails[pageIndex].OriginalPageIndex;
+        }
+
+        var (width, height) = tab.PdfService.GetPageDimensions(originalPageIndex);
+        int rotation = tab.GetPageRotation(pageIndex);
+        if (((rotation % 360) + 360) % 360 is 90 or 270)
+        {
+            (width, height) = (height, width);
+        }
+
+        MatchRenderedImageOrientation(pageImage, ref width, ref height);
+        pageImage.UpdateDisplaySize(width, height, tab.ZoomScale);
+    }
+
+    private void UpdatePageImageDisplaySize(PageImage pageImage, int pageIndex)
+    {
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        int originalPageIndex = pageIndex;
+        if (pageIndex >= 0 && pageIndex < PageThumbnails.Count)
+        {
+            originalPageIndex = PageThumbnails[pageIndex].OriginalPageIndex;
+        }
+
+        var (width, height) = pdfService.GetPageDimensions(originalPageIndex);
+        int rotation = GetPageRotation(pageIndex);
+        if (((rotation % 360) + 360) % 360 is 90 or 270)
+        {
+            (width, height) = (height, width);
+        }
+
+        MatchRenderedImageOrientation(pageImage, ref width, ref height);
+        pageImage.UpdateDisplaySize(width, height, ZoomScale);
+    }
+
+    private static void MatchRenderedImageOrientation(PageImage pageImage, ref float width, ref float height)
+    {
+        if (pageImage.Image == null || width <= 0 || height <= 0)
+            return;
+
+        bool renderedPortrait = pageImage.Image.Width < pageImage.Image.Height;
+        bool dimensionsPortrait = width < height;
+        if (renderedPortrait != dimensionsPortrait)
+        {
+            (width, height) = (height, width);
+        }
     }
 
     private async Task LoadThumbnailsAsync()
@@ -519,146 +612,139 @@ public partial class MainViewModel
     private async Task Save()
     {
         if (!IsFileLoaded || string.IsNullOrEmpty(FilePath)) return;
-
-        var logPath = Path.Combine(Path.GetDirectoryName(FilePath) ?? Path.GetTempPath(), "OpenJPDF_Save_Log.txt");
-
-        void Log(string message)
-        {
-            var logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-            System.Diagnostics.Debug.WriteLine(logLine);
-            try { File.AppendAllText(logPath, logLine + Environment.NewLine); } catch { }
-        }
+        if (IsSaving) return;
 
         try
         {
-            Log($"=== SAVE START === FilePath: {FilePath}");
-            StatusMessage = "Saving...";
-
-            // Remember current page to restore after save
-            int savedPageIndex = CurrentPageIndex;
-
-            var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-            Log($"PdfService: {(ActiveDocument != null ? "ActiveDocument.PdfService" : "_pdfService")}");
-            Log($"Current PageCount: {pdfService.PageCount}");
-
-            Log("Step 1: Apply content modifications");
-            ApplyContentModificationsToService(pdfService);
-            Log("Content modifications applied");
-
-            Log("Step 2: SyncAnnotationsToService");
-            SyncAnnotationsToService();
-            Log($"Annotations synced: {Annotations.Count}");
-
-            Log("Step 3: SaveAsync");
-            bool success = await pdfService.SaveAsync(FilePath);
-            Log($"SaveAsync result: {success}");
-
-            if (success)
-            {
-                // Apply header/footer if configured
-                if (HasHeaderFooter && HeaderFooterConfig != null)
-                {
-                    Log("Step 3: Apply header/footer");
-                    StatusMessage = "Applying header/footer...";
-                    string tempFile = Path.GetTempFileName();
-                    try
-                    {
-                        bool hfSuccess = await pdfService.ApplyHeaderFooterAsync(FilePath, tempFile, HeaderFooterConfig, Path.GetFileName(FilePath));
-                        Log($"ApplyHeaderFooterAsync result: {hfSuccess}");
-                        if (hfSuccess)
-                        {
-                            File.Delete(FilePath);
-                            File.Move(tempFile, FilePath);
-                            Log("Header/Footer applied and file replaced");
-                        }
-                        else
-                        {
-                            if (File.Exists(tempFile)) File.Delete(tempFile);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"Header/Footer ERROR: {ex.Message}\n{ex.StackTrace}");
-                        if (File.Exists(tempFile)) File.Delete(tempFile);
-                    }
-                }
-
-                Log("Step 4: LoadPdfAsync (reload)");
-                bool loadSuccess = await pdfService.LoadPdfAsync(FilePath);
-                Log($"LoadPdfAsync result: {loadSuccess}, PageCount: {pdfService.PageCount}");
-
-                StatusMessage = "Saved successfully";
-
-                Log("Step 5: Clear annotations");
-                Annotations.Clear();
-                SelectedAnnotation = null;
-                ClearAnnotationsRequested?.Invoke();
-                ClearPageRotations();
-
-                if (ActiveDocument != null)
-                {
-                    Log("Step 6: Reload ActiveDocument");
-                    ActiveDocument.HasUnsavedChanges = false;
-                    ActiveDocument.ClearPageRotations();
-                    ActiveDocument.TotalPages = pdfService.PageCount;
-                    Log($"ActiveDocument.TotalPages set to: {ActiveDocument.TotalPages}");
-
-                    Log("Step 7: LoadThumbnailsForTab");
-                    await LoadThumbnailsForTab(ActiveDocument);
-                    Log($"Thumbnails loaded: {ActiveDocument.PageThumbnails.Count}");
-
-                    Log("Step 8: LoadAllPagesForTab");
-                    await LoadAllPagesForTab(ActiveDocument);
-                    Log($"Pages loaded: {ActiveDocument.PageImages.Count}");
-
-                    // Sync collections to MainViewModel
-                    Log("Step 8.1: Sync collections");
-                    PageThumbnails = ActiveDocument.PageThumbnails;
-                    PageImages = ActiveDocument.PageImages;
-                    TotalPages = ActiveDocument.TotalPages;
-                    Log($"MainViewModel PageImages.Count: {PageImages.Count}");
-                }
-                else
-                {
-                    Log("Step 6: Reload (no ActiveDocument)");
-                    TotalPages = pdfService.PageCount;
-
-                    Log("Step 7: LoadThumbnailsAsync");
-                    await LoadThumbnailsAsync();
-                    Log($"Thumbnails loaded: {PageThumbnails.Count}");
-
-                    Log("Step 8: LoadAllPagesAsync");
-                    await LoadAllPagesAsync();
-                    Log($"Pages loaded: {PageImages.Count}");
-                }
-
-                // Restore to saved page (clamped to valid range)
-                Log($"Step 9: Restore page index (saved: {savedPageIndex}, total: {TotalPages})");
-                CurrentPageIndex = Math.Clamp(savedPageIndex, 0, Math.Max(0, TotalPages - 1));
-                if (ActiveDocument != null)
-                {
-                    ActiveDocument.CurrentPageIndex = CurrentPageIndex;
-                }
-
-                Log("Step 10: LoadCurrentPage");
-                LoadCurrentPage();
-                Log($"CurrentPageIndex: {CurrentPageIndex}, CurrentPageImage is null: {CurrentPageImage == null}");
-
-                Log("=== SAVE COMPLETE ===");
-            }
-            else
-            {
-                Log("=== SAVE FAILED (SaveAsync returned false) ===");
-                StatusMessage = "Save failed";
-                MessageBox.Show("Failed to save the PDF file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+            IsSaving = true;
+            await SaveToPathAsync(FilePath, updateDocumentPath: false);
+            StatusMessage = "Saved successfully";
         }
         catch (Exception ex)
         {
-            Log($"=== SAVE EXCEPTION ===\n{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
             StatusMessage = $"Save error: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"Save error: {ex}");
             MessageBox.Show($"Error saving PDF:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+        finally
+        {
+            IsSaving = false;
+        }
+    }
+
+    private async Task SaveToPathAsync(string targetPath, bool updateDocumentPath)
+    {
+        int savedPageIndex = CurrentPageIndex;
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+
+        StatusMessage = "Saving...";
+        CommitHeaderFooterEditModeIfActive();
+        ApplyContentModificationsToService(pdfService);
+        SyncAnnotationsToService();
+
+        bool success = await pdfService.SaveAsync(targetPath);
+        if (!success)
+            throw new InvalidOperationException("Failed to save the PDF file.");
+
+        await ApplyHeaderFooterIfConfiguredAsync(pdfService, targetPath);
+
+        if (updateDocumentPath)
+        {
+            FilePath = targetPath;
+            if (ActiveDocument != null)
+            {
+                ActiveDocument.FilePath = targetPath;
+                ActiveDocument.FileName = Path.GetFileName(targetPath);
+            }
+        }
+
+        await pdfService.ReloadBytesFromFileAsync(targetPath);
+        ClearPageRotations();
+        await RefreshDocumentAfterServiceChangeAsync(pdfService, savedPageIndex, hasUnsavedChanges: false);
+        ClearBakedEditorStateAfterSave();
+        SyncToActiveDocument();
+    }
+
+    private async Task ApplyHeaderFooterIfConfiguredAsync(IPdfService pdfService, string targetPath)
+    {
+        if (!HasHeaderFooter || HeaderFooterConfig == null)
+            return;
+
+        StatusMessage = "Applying header/footer...";
+        string tempFile = Path.GetTempFileName();
+        try
+        {
+            bool success = await pdfService.ApplyHeaderFooterAsync(
+                targetPath,
+                tempFile,
+                HeaderFooterConfig,
+                Path.GetFileName(targetPath));
+
+            if (!success)
+                throw new InvalidOperationException("Failed to apply header/footer.");
+
+            File.Delete(targetPath);
+            File.Move(tempFile, targetPath);
+            ClearBakedHeaderFooterConfig();
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch
+            {
+                // Best-effort cleanup only.
+            }
+        }
+    }
+
+    private async Task RefreshDocumentAfterServiceChangeAsync(
+        IPdfService pdfService,
+        int pageIndexToRestore,
+        bool hasUnsavedChanges)
+    {
+        if (ActiveDocument != null)
+        {
+            ActiveDocument.TotalPages = pdfService.PageCount;
+            ActiveDocument.HasUnsavedChanges = hasUnsavedChanges;
+            if (!hasUnsavedChanges)
+            {
+                ActiveDocument.ClearPageRotations();
+            }
+
+            await LoadThumbnailsForTab(ActiveDocument);
+            await LoadAllPagesForTab(ActiveDocument);
+
+            PageThumbnails = ActiveDocument.PageThumbnails;
+            PageImages = ActiveDocument.PageImages;
+            TotalPages = ActiveDocument.TotalPages;
+        }
+        else
+        {
+            TotalPages = pdfService.PageCount;
+            await LoadThumbnailsAsync();
+            await LoadAllPagesAsync();
+        }
+
+        CurrentPageIndex = Math.Clamp(pageIndexToRestore, 0, Math.Max(0, TotalPages - 1));
+        if (ActiveDocument != null)
+        {
+            ActiveDocument.CurrentPageIndex = CurrentPageIndex;
+        }
+
+        LoadCurrentPage();
+    }
+
+    private void ClearBakedEditorStateAfterSave()
+    {
+        Annotations.Clear();
+        SelectedAnnotation = null;
+        ClearBakedContentModifications();
+        ClearAnnotationsRequested?.Invoke();
+        HasPageOrderChanged = false;
     }
 
     private void SyncAnnotationsToService()
@@ -666,6 +752,8 @@ public partial class MainViewModel
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
         
         pdfService.ClearAnnotations();
+
+        RefreshTextAnnotationMetrics();
         
         System.Diagnostics.Debug.WriteLine($"SyncAnnotationsToService: {Annotations.Count} annotations to sync");
         
@@ -692,10 +780,66 @@ public partial class MainViewModel
         }
     }
 
+    private async Task BakePendingEditsIntoWorkingPdfAsync(IPdfService pdfService)
+    {
+        bool hasPendingUiAnnotations = Annotations.Count > 0;
+        bool hasPendingPageChanges = HasPageOrderChanged || _pageRotations.Count > 0;
+        bool hasPendingContentChanges = HasPendingContentModifications();
+
+        if (!hasPendingUiAnnotations && !hasPendingPageChanges && !hasPendingContentChanges)
+            return;
+
+        CommitHeaderFooterEditModeIfActive();
+        ApplyContentModificationsToService(pdfService);
+        SyncAnnotationsToService();
+
+        string tempFile = Path.Combine(Path.GetTempPath(), $"OpenJPDF-working-{Guid.NewGuid():N}.pdf");
+        try
+        {
+            bool success = await pdfService.SaveAsync(tempFile);
+            if (!success)
+                throw new InvalidOperationException("Failed to prepare current PDF edits before importing pages.");
+
+            await pdfService.ReloadBytesFromFileAsync(tempFile);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch
+            {
+                // Best-effort cleanup only; service already has the PDF bytes in memory.
+            }
+        }
+
+        Annotations.Clear();
+        SelectedAnnotation = null;
+        ClearBakedContentModifications();
+        ClearAnnotationsRequested?.Invoke();
+        ClearPageRotations();
+        HasPageOrderChanged = false;
+    }
+
+    private void ClearBakedHeaderFooterConfig()
+    {
+        HeaderFooterConfig = null;
+        if (ActiveDocument != null)
+        {
+            ActiveDocument.HeaderFooterConfig = null;
+        }
+
+        OnPropertyChanged(nameof(HasHeaderFooter));
+        RefreshHeaderFooterPreview?.Invoke();
+    }
+
     [RelayCommand]
     private async Task SaveAs()
     {
         if (!IsFileLoaded) return;
+        if (IsSaving) return;
 
         var dialog = new SaveFileDialog
         {
@@ -706,93 +850,20 @@ public partial class MainViewModel
 
         if (dialog.ShowDialog() == true)
         {
-            var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-
-            // Remember current page to restore after save
-            int savedPageIndex = CurrentPageIndex;
-
-            StatusMessage = "Saving...";
-            ApplyContentModificationsToService(pdfService);
-            SyncAnnotationsToService();
-            bool success = await pdfService.SaveAsync(dialog.FileName);
-
-            if (success)
+            try
             {
-                // Apply header/footer if configured
-                if (HasHeaderFooter && HeaderFooterConfig != null)
-                {
-                    StatusMessage = "Applying header/footer...";
-                    string tempFile = Path.GetTempFileName();
-                    try
-                    {
-                        bool hfSuccess = await pdfService.ApplyHeaderFooterAsync(dialog.FileName, tempFile, HeaderFooterConfig, Path.GetFileName(dialog.FileName));
-                        if (hfSuccess)
-                        {
-                            // Replace saved file with header/footer applied version
-                            File.Delete(dialog.FileName);
-                            File.Move(tempFile, dialog.FileName);
-                            System.Diagnostics.Debug.WriteLine("Header/Footer applied successfully during SaveAs");
-                        }
-                        else
-                        {
-                            System.Diagnostics.Debug.WriteLine("Failed to apply header/footer during SaveAs");
-                            if (File.Exists(tempFile)) File.Delete(tempFile);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error applying header/footer: {ex.Message}");
-                        if (File.Exists(tempFile)) File.Delete(tempFile);
-                    }
-                }
-                
-                FilePath = dialog.FileName;
-
-                // Reload the document after SaveAs to refresh file handles
-                await pdfService.LoadPdfAsync(dialog.FileName);
-
-                Annotations.Clear();
-                SelectedAnnotation = null;
-                ClearAnnotationsRequested?.Invoke();
-                ClearPageRotations();
-
-                // Reload thumbnails and all pages for continuous scroll
-                if (ActiveDocument != null)
-                {
-                    ActiveDocument.FilePath = dialog.FileName;
-                    ActiveDocument.FileName = Path.GetFileName(dialog.FileName);
-                    ActiveDocument.TotalPages = pdfService.PageCount;
-                    ActiveDocument.HasUnsavedChanges = false;
-                    ActiveDocument.ClearPageRotations();
-                    await LoadThumbnailsForTab(ActiveDocument);
-                    await LoadAllPagesForTab(ActiveDocument);
-
-                    // Sync collections to MainViewModel
-                    PageThumbnails = ActiveDocument.PageThumbnails;
-                    PageImages = ActiveDocument.PageImages;
-                    TotalPages = ActiveDocument.TotalPages;
-                }
-                else
-                {
-                    TotalPages = pdfService.PageCount;
-                    await LoadThumbnailsAsync();
-                    await LoadAllPagesAsync();
-                }
-
-                // Restore to saved page (clamped to valid range)
-                CurrentPageIndex = Math.Clamp(savedPageIndex, 0, Math.Max(0, TotalPages - 1));
-                if (ActiveDocument != null)
-                {
-                    ActiveDocument.CurrentPageIndex = CurrentPageIndex;
-                }
-                LoadCurrentPage();
-
+                IsSaving = true;
+                await SaveToPathAsync(dialog.FileName, updateDocumentPath: true);
                 StatusMessage = $"Saved: {Path.GetFileName(dialog.FileName)}";
             }
-            else
+            catch (Exception ex)
             {
-                StatusMessage = "Save failed";
-                MessageBox.Show("Failed to save the PDF file.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StatusMessage = $"Save error: {ex.Message}";
+                MessageBox.Show($"Error saving PDF:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsSaving = false;
             }
         }
     }
@@ -910,14 +981,55 @@ public partial class MainViewModel
                 ZoomLevel = $"{percent}%";
                 return; // Prevent double update
             }
+
+            if (ActiveDocument != null)
+            {
+                ActiveDocument.ZoomScale = ZoomScale;
+                ActiveDocument.ZoomLevel = ZoomLevel;
+            }
             
             // Skip reload during document sync or if no file loaded
             if (_isSyncingDocument || !IsFileLoaded) return;
             
-            LoadCurrentPage();
+            UpdateAllPageDisplaySizes();
+
+            if (IsScrollablePageView)
+            {
+                _ = ReloadAllPagesAsync();
+            }
+            else
+            {
+                LoadCurrentPage();
+            }
+
             RefreshAnnotationsRequested?.Invoke();
             RefreshHeaderFooterPreview?.Invoke();
         }
+    }
+
+    partial void OnPageViewModeChanged(PageViewMode value)
+    {
+        OnPropertyChanged(nameof(PageViewColumnCount));
+        OnPropertyChanged(nameof(IsSinglePageSurfaceVisible));
+        OnPropertyChanged(nameof(IsMultiPageSurfaceVisible));
+        OnPropertyChanged(nameof(IsContinuousPageView));
+        OnPropertyChanged(nameof(IsPagedGridView));
+        OnPropertyChanged(nameof(IsScrollablePageView));
+
+        if (_isSyncingDocument || !IsFileLoaded) return;
+
+        UpdateAllPageDisplaySizes();
+        if (IsScrollablePageView)
+        {
+            _ = ReloadAllPagesAsync();
+        }
+        else
+        {
+            LoadCurrentPage();
+        }
+
+        RefreshAnnotationsRequested?.Invoke();
+        RefreshHeaderFooterPreview?.Invoke();
     }
 
     #endregion

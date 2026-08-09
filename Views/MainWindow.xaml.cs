@@ -54,6 +54,7 @@ public partial class MainWindow : Window
 
     // ===== Page Navigation State =====
     private DateTime _lastPageChangeTime = DateTime.MinValue;
+    private DateTime _lastVisiblePagePreloadTime = DateTime.MinValue;
     private bool _isChangingPage = false;
     private const int PAGE_CHANGE_DEBOUNCE_MS = 200;
 
@@ -64,7 +65,6 @@ public partial class MainWindow : Window
     private readonly Services.OcrService _ocrService = new();
 
     // Thumbnail drag-drop state
-    private bool _isThumbnailDragging;
     private WpfPoint _thumbnailDragStartPoint;
     private PageThumbnail? _draggedThumbnail;
 
@@ -295,6 +295,28 @@ public partial class MainWindow : Window
             // Hide resize handles when selection changes - they will be shown when element is clicked
             _resizeHandlesManager?.HideHandles();
         }
+        else if (e.PropertyName == nameof(MainViewModel.ActiveDocument) ||
+                 e.PropertyName == nameof(MainViewModel.IsFileLoaded))
+        {
+            ScheduleInitialFitWidth(sender as MainViewModel);
+        }
+    }
+
+    private void ScheduleInitialFitWidth(MainViewModel? vm)
+    {
+        if (vm is not { IsFileLoaded: true } || vm.ZoomLevel != "100%" || !vm.IsScrollablePageView)
+            return;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (DataContext is MainViewModel currentVm &&
+                currentVm.IsFileLoaded &&
+                currentVm.ZoomLevel == "100%" &&
+                currentVm.IsScrollablePageView)
+            {
+                ApplyFitZoom(fitWidthOnly: true);
+            }
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void ShowAboutDialog()
@@ -349,10 +371,28 @@ public partial class MainWindow : Window
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
             e.Handled = true;
+            double scrollRatio = scrollViewer.ScrollableHeight > 0
+                ? scrollViewer.VerticalOffset / scrollViewer.ScrollableHeight
+                : 0;
+
             if (e.Delta > 0)
                 vm.ZoomInCommand.Execute(null);
             else
                 vm.ZoomOutCommand.Execute(null);
+
+            if (vm.IsScrollablePageView)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    double targetOffset = Math.Clamp(scrollRatio, 0, 1) * scrollViewer.ScrollableHeight;
+                    scrollViewer.ScrollToVerticalOffset(targetOffset);
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+            return;
+        }
+
+        if (vm.IsScrollablePageView)
+        {
             return;
         }
 
@@ -423,17 +463,107 @@ public partial class MainWindow : Window
     /// </summary>
     private void PdfScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        // Page navigation is handled in PreviewMouseWheel
-        // This can be used for other scroll-related UI updates if needed
+        if (DataContext is not MainViewModel vm || !vm.IsScrollablePageView || !vm.IsFileLoaded)
+            return;
+
+        if ((DateTime.Now - _lastVisiblePagePreloadTime).TotalMilliseconds < 150)
+            return;
+
+        _lastVisiblePagePreloadTime = DateTime.Now;
+        int visiblePage = EstimateFirstVisiblePageIndex(vm, sender as ScrollViewer);
+        if (visiblePage < 0 || visiblePage >= vm.TotalPages)
+            return;
+
+        if (visiblePage != vm.CurrentPageIndex)
+        {
+            vm.CurrentPageIndex = visiblePage;
+        }
+
+        _ = vm.PreloadNearbyPagesAsync(visiblePage);
     }
 
     /// <summary>
-    /// Handle click on a page in continuous scroll view (not used in current hybrid approach)
+    /// Handle click on a page in multi-page or continuous view.
     /// </summary>
     private void PageContainer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        // Currently using hybrid approach - continuous scroll for viewing
-        // Annotations are handled by PdfContainer_MouseLeftButtonDown
+        if (DataContext is not MainViewModel vm || sender is not FrameworkElement element)
+            return;
+
+        if (element.DataContext is PageImage pageImage &&
+            pageImage.PageIndex >= 0 &&
+            pageImage.PageIndex < vm.TotalPages)
+        {
+            vm.CurrentPageIndex = pageImage.PageIndex;
+            _ = vm.PreloadNearbyPagesAsync(pageImage.PageIndex);
+        }
+    }
+
+    private int EstimateFirstVisiblePageIndex(MainViewModel vm, ScrollViewer? scrollViewer)
+    {
+        if (scrollViewer == null || vm.TotalPages <= 0)
+            return -1;
+
+        if (vm.PageImages.Count == 0)
+            return vm.CurrentPageIndex;
+
+        int columns = Math.Max(1, vm.PageViewColumnCount);
+        double offset = scrollViewer.VerticalOffset;
+        double accumulatedHeight = 0;
+        int row = 0;
+
+        for (int i = 0; i < vm.PageImages.Count; i += columns)
+        {
+            double rowHeight = 0;
+            for (int col = 0; col < columns && i + col < vm.PageImages.Count; col++)
+            {
+                rowHeight = Math.Max(rowHeight, vm.PageImages[i + col].DisplayHeight);
+            }
+
+            rowHeight = Math.Max(1, rowHeight + 18);
+            if (accumulatedHeight + rowHeight > offset)
+                break;
+
+            accumulatedHeight += rowHeight;
+            row++;
+        }
+
+        int pageIndex = row * columns;
+        return Math.Clamp(pageIndex, 0, vm.TotalPages - 1);
+    }
+
+    private void FitPageButton_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyFitZoom(fitWidthOnly: false);
+    }
+
+    private void FitWidthButton_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyFitZoom(fitWidthOnly: true);
+    }
+
+    private void ApplyFitZoom(bool fitWidthOnly)
+    {
+        if (DataContext is not MainViewModel vm || !vm.IsFileLoaded)
+            return;
+
+        var (pageWidthPts, pageHeightPts) = vm.GetCurrentPageDisplayDimensionsInPoints();
+        if (pageWidthPts <= 0 || pageHeightPts <= 0)
+            return;
+
+        double columns = vm.IsMultiPageSurfaceVisible ? Math.Max(1, vm.PageViewColumnCount) : 1;
+        double availableWidth = Math.Max(100, (PdfScrollViewer?.ViewportWidth ?? ActualWidth) - 48);
+        double availableHeight = Math.Max(100, (PdfScrollViewer?.ViewportHeight ?? ActualHeight) - 48);
+        double pageWidthDip = pageWidthPts * 96.0 / 72.0;
+        double pageHeightDip = pageHeightPts * 96.0 / 72.0;
+        double perPageWidth = Math.Max(100, (availableWidth / columns) - 18);
+
+        double scale = fitWidthOnly
+            ? perPageWidth / pageWidthDip
+            : Math.Min(perPageWidth / pageWidthDip, availableHeight / pageHeightDip);
+
+        int percent = (int)Math.Round(Math.Clamp(scale * 100.0, 10, 500) / 5.0) * 5;
+        vm.ZoomLevel = $"{percent}%";
     }
 
     private void PdfContainer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1851,22 +1981,56 @@ public partial class MainWindow : Window
             // Update annotation position in ViewModel
             if (DataContext is MainViewModel vm)
             {
-                double newX = Canvas.GetLeft(_draggedElement) / vm.ZoomScale;
-                double newY = Canvas.GetTop(_draggedElement) / vm.ZoomScale;
-                
-                // Record move action for undo if position changed significantly
-                if (Math.Abs(newX - _dragOriginalX) > 0.1 || Math.Abs(newY - _dragOriginalY) > 0.1)
+                if (_draggedAnnotation is ShapeAnnotationItem { ShapeType: ShapeType.Line } lineAnnotation)
                 {
-                    var moveAction = new Services.MoveAnnotationAction(
-                        _draggedAnnotation, 
-                        _dragOriginalX, _dragOriginalY, 
-                        newX, newY);
-                    vm.RecordUndoableAction(moveAction);
+                    double oldX = lineAnnotation.X;
+                    double oldY = lineAnnotation.Y;
+                    double oldX2 = lineAnnotation.X2;
+                    double oldY2 = lineAnnotation.Y2;
+                    double oldMinX = Math.Min(oldX, oldX2);
+                    double oldMinY = Math.Min(oldY, oldY2);
+                    double newMinX = (Canvas.GetLeft(_draggedElement) + 5) / vm.ZoomScale;
+                    double newMinY = (Canvas.GetTop(_draggedElement) + 5) / vm.ZoomScale;
+                    double deltaX = newMinX - oldMinX;
+                    double deltaY = newMinY - oldMinY;
+                    double newX = oldX + deltaX;
+                    double newY = oldY + deltaY;
+                    double newX2 = oldX2 + deltaX;
+                    double newY2 = oldY2 + deltaY;
+
+                    if (Math.Abs(deltaX) > 0.1 || Math.Abs(deltaY) > 0.1)
+                    {
+                        var moveAction = new MoveLineAnnotationAction(
+                            lineAnnotation,
+                            oldX, oldY, oldX2, oldY2,
+                            newX, newY, newX2, newY2);
+                        vm.RecordUndoableAction(moveAction);
+                    }
+
+                    lineAnnotation.X = newX;
+                    lineAnnotation.Y = newY;
+                    lineAnnotation.X2 = newX2;
+                    lineAnnotation.Y2 = newY2;
                 }
-                
-                _draggedAnnotation.X = newX;
-                _draggedAnnotation.Y = newY;
-                
+                else
+                {
+                    double newX = Canvas.GetLeft(_draggedElement) / vm.ZoomScale;
+                    double newY = Canvas.GetTop(_draggedElement) / vm.ZoomScale;
+
+                    // Record move action for undo if position changed significantly
+                    if (Math.Abs(newX - _dragOriginalX) > 0.1 || Math.Abs(newY - _dragOriginalY) > 0.1)
+                    {
+                        var moveAction = new MoveAnnotationAction(
+                            _draggedAnnotation,
+                            _dragOriginalX, _dragOriginalY,
+                            newX, newY);
+                        vm.RecordUndoableAction(moveAction);
+                    }
+
+                    _draggedAnnotation.X = newX;
+                    _draggedAnnotation.Y = newY;
+                }
+
                 // Update resize/rotation handles position after dragging
                 if (_draggedAnnotation is ImageAnnotationItem || _draggedAnnotation is ShapeAnnotationItem || _draggedAnnotation is TextAnnotationItem)
                 {
@@ -1974,7 +2138,7 @@ public partial class MainWindow : Window
             // Re-measure text size
             if (vm != null)
             {
-                var (width, height) = MeasureTextSize(
+                var (width, height, baseline) = MeasureTextSize(
                     newText,
                     _editingAnnotation.FontFamily,
                     _editingAnnotation.FontSize,
@@ -1982,6 +2146,7 @@ public partial class MainWindow : Window
                     _editingAnnotation.IsItalic);
                 _editingAnnotation.Width = width;
                 _editingAnnotation.Height = height;
+                _editingAnnotation.BaselineOffset = baseline;
 
                 vm.StatusMessage = "Text updated.";
             }
@@ -2004,7 +2169,7 @@ public partial class MainWindow : Window
     /// Measure text size (copy from ViewModel for use in code-behind)
     /// Font size is expected in POINTS, will be converted to DIPs for WPF
     /// </summary>
-    private static (double Width, double Height) MeasureTextSize(string text, string fontFamily, float fontSizePoints, bool isBold, bool isItalic)
+    private static (double Width, double Height, double Baseline) MeasureTextSize(string text, string fontFamily, float fontSizePoints, bool isBold, bool isItalic)
     {
         // Convert font size from points to DIPs for WPF measurement
         const double POINTS_TO_DIPS = 96.0 / 72.0;
@@ -2027,7 +2192,7 @@ public partial class MainWindow : Window
             System.Windows.Media.TextFormattingMode.Display,
             96);
 
-        return (formattedText.Width + 4, formattedText.Height + 4);
+        return (formattedText.Width + 4, formattedText.Height + 4, formattedText.Baseline);
     }
 
     #endregion
@@ -2151,57 +2316,36 @@ public partial class MainWindow : Window
 
         if (annotation is TextAnnotationItem textItem)
         {
-            newAnnotation = new TextAnnotationItem
-            {
-                PageNumber = textItem.PageNumber,
-                X = textItem.X + 20,
-                Y = textItem.Y + 20,
-                Text = textItem.Text,
-                FontFamily = textItem.FontFamily,
-                FontSize = textItem.FontSize,
-                Color = textItem.Color,
-                BackgroundColor = textItem.BackgroundColor,
-                BorderColor = textItem.BorderColor,
-                BorderWidth = textItem.BorderWidth,
-                IsBold = textItem.IsBold,
-                IsItalic = textItem.IsItalic,
-                IsUnderline = textItem.IsUnderline
-            };
+            var clone = TextAnnotationItem.FromAnnotation(textItem.ToAnnotation());
+            clone.X += 20;
+            clone.Y += 20;
+            newAnnotation = clone;
         }
         else if (annotation is ImageAnnotationItem imgItem)
         {
-            newAnnotation = new ImageAnnotationItem
-            {
-                PageNumber = imgItem.PageNumber,
-                X = imgItem.X + 20,
-                Y = imgItem.Y + 20,
-                Width = imgItem.Width,
-                Height = imgItem.Height,
-                ImagePath = imgItem.ImagePath
-            };
+            var clone = ImageAnnotationItem.FromAnnotation(imgItem.ToAnnotation());
+            clone.X += 20;
+            clone.Y += 20;
+            newAnnotation = clone;
         }
         else if (annotation is ShapeAnnotationItem shapeItem)
         {
-            newAnnotation = new ShapeAnnotationItem
-            {
-                PageNumber = shapeItem.PageNumber,
-                X = shapeItem.X + 20,
-                Y = shapeItem.Y + 20,
-                Width = shapeItem.Width,
-                Height = shapeItem.Height,
-                ShapeType = shapeItem.ShapeType,
-                FillColor = shapeItem.FillColor,
-                StrokeColor = shapeItem.StrokeColor,
-                StrokeWidth = shapeItem.StrokeWidth,
-                X2 = shapeItem.X2 + 20,
-                Y2 = shapeItem.Y2 + 20
-            };
+            var clone = ShapeAnnotationItem.FromAnnotation(shapeItem.ToAnnotation());
+            clone.X += 20;
+            clone.Y += 20;
+            clone.X2 += 20;
+            clone.Y2 += 20;
+            newAnnotation = clone;
         }
 
         if (newAnnotation != null)
         {
             vm.Annotations.Add(newAnnotation);
             vm.SelectedAnnotation = newAnnotation;
+
+            // Also store in internal clipboard for cross-page paste (Ctrl+V)
+            vm.CopySelectedAnnotationCommand.Execute(null);
+
             RefreshAnnotationPreviews();
             vm.StatusMessage = "Element copied.";
         }
@@ -2317,6 +2461,7 @@ public partial class MainWindow : Window
             // DIPs = points * (96/72) = points * 1.333
             const double POINTS_TO_DIPS = 96.0 / 72.0;
             double fontSizeInDips = textAnn.FontSize * POINTS_TO_DIPS * zoomScale;
+            double padding = 2 * zoomScale;
             
             var textBlock = new TextBlock
             {
@@ -2326,7 +2471,8 @@ public partial class MainWindow : Window
                 Foreground = new SolidColorBrush(textColor),
                 FontWeight = textAnn.IsBold ? FontWeights.Bold : FontWeights.Normal,
                 FontStyle = textAnn.IsItalic ? FontStyles.Italic : FontStyles.Normal,
-                Padding = new Thickness(2),
+                Padding = new Thickness(padding),
+                ClipToBounds = true,
                 TextAlignment = textAnn.TextAlignment switch
                 {
                     Models.TextAlignment.Center => System.Windows.TextAlignment.Center,
@@ -2353,8 +2499,19 @@ public partial class MainWindow : Window
                 BorderThickness = new Thickness(textAnn.BorderWidth * zoomScale),
                 Child = textBlock,
                 Cursor = WpfCursors.SizeAll,
-                Tag = annotationItem
+                Tag = annotationItem,
+                ClipToBounds = true
             };
+
+            if (textAnn.Width > 0)
+            {
+                border.Width = textAnn.Width * zoomScale;
+            }
+
+            if (textAnn.Height > 0)
+            {
+                border.Height = textAnn.Height * zoomScale;
+            }
 
             // Add selection indicator when hovering
             border.MouseEnter += (s, e) => {
@@ -2442,6 +2599,8 @@ public partial class MainWindow : Window
 
                 case ShapeType.Line:
                     // For lines, wrap in a Canvas for easier dragging
+                    double minX = Math.Min(shapeAnn.X, shapeAnn.X2);
+                    double minY = Math.Min(shapeAnn.Y, shapeAnn.Y2);
                     var lineCanvas = new Canvas
                     {
                         Width = Math.Abs(shapeAnn.X2 - shapeAnn.X) * zoomScale + 10,
@@ -2452,21 +2611,27 @@ public partial class MainWindow : Window
                     };
                     var line = new WpfLine
                     {
-                        X1 = 5,
-                        Y1 = 5,
-                        X2 = (shapeAnn.X2 - shapeAnn.X) * zoomScale + 5,
-                        Y2 = (shapeAnn.Y2 - shapeAnn.Y) * zoomScale + 5,
+                        X1 = (shapeAnn.X - minX) * zoomScale + 5,
+                        Y1 = (shapeAnn.Y - minY) * zoomScale + 5,
+                        X2 = (shapeAnn.X2 - minX) * zoomScale + 5,
+                        Y2 = (shapeAnn.Y2 - minY) * zoomScale + 5,
                         Stroke = new SolidColorBrush(strokeColor),
                         StrokeThickness = shapeAnn.StrokeWidth * zoomScale
                     };
                     lineCanvas.Children.Add(line);
                     shape = lineCanvas;
-                    Canvas.SetLeft(shape, Math.Min(shapeAnn.X, shapeAnn.X2) * zoomScale - 5);
-                    Canvas.SetTop(shape, Math.Min(shapeAnn.Y, shapeAnn.Y2) * zoomScale - 5);
+                    Canvas.SetLeft(shape, minX * zoomScale - 5);
+                    Canvas.SetTop(shape, minY * zoomScale - 5);
                     break;
 
                 default:
                     return;
+            }
+
+            if (Math.Abs(shapeAnn.Rotation) > 0.1)
+            {
+                shape.RenderTransformOrigin = new WpfPoint(0.5, 0.5);
+                shape.RenderTransform = new RotateTransform(shapeAnn.Rotation);
             }
 
             // Add drag & drop and right-click handlers
@@ -2512,7 +2677,8 @@ public partial class MainWindow : Window
             {
                 Source = bitmap,
                 Width = imgAnn.Width * zoomScale,
-                Height = imgAnn.Height * zoomScale
+                Height = imgAnn.Height * zoomScale,
+                Stretch = Stretch.Fill
             };
 
             var border = new Border
@@ -2801,7 +2967,7 @@ public partial class MainWindow : Window
                     var image = new WpfImage
                     {
                         Source = bitmapImage,
-                        Stretch = Stretch.Uniform,
+                        Stretch = Stretch.Fill,
                         Opacity = 0.7
                     };
                     border.Child = image;
@@ -2940,14 +3106,21 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
 
+        var (_, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
+        const double PointsToDips = 96.0 / 72.0;
+        double annotationX = textItem.X * PointsToDips;
+        double annotationY = (pageHeight - textItem.Y - textItem.Height) * PointsToDips;
+        double annotationWidth = textItem.Width * PointsToDips;
+        double annotationHeight = textItem.Height * PointsToDips;
+
         // Create new text annotation from extracted text
         var annotation = new TextAnnotationItem
         {
             PageNumber = textItem.PageNumber,
-            X = textItem.X,
-            Y = textItem.Y,
-            Width = textItem.Width,
-            Height = textItem.Height,
+            X = annotationX,
+            Y = annotationY,
+            Width = annotationWidth,
+            Height = annotationHeight,
             Text = textItem.Text,
             FontFamily = !string.IsNullOrEmpty(textItem.FontName) ? textItem.FontName : "Arial",
             FontSize = textItem.FontSize > 0 ? textItem.FontSize : 12f,
@@ -2985,14 +3158,21 @@ public partial class MainWindow : Window
             // PERFORMANCE FIX: Use async I/O
             await Task.Run(() => System.IO.File.WriteAllBytes(tempPath, imageItem.ImageBytes));
 
+            var (_, pageHeight) = vm.GetCurrentPageDimensionsInPoints();
+            const double PointsToDips = 96.0 / 72.0;
+            double annotationX = imageItem.X * PointsToDips;
+            double annotationY = (pageHeight - imageItem.Y - imageItem.Height) * PointsToDips;
+            double annotationWidth = imageItem.Width * PointsToDips;
+            double annotationHeight = imageItem.Height * PointsToDips;
+
             // Create new image annotation from extracted image
             var annotation = new ImageAnnotationItem
             {
                 PageNumber = imageItem.PageNumber,
-                X = imageItem.X,
-                Y = imageItem.Y,
-                Width = imageItem.Width,
-                Height = imageItem.Height,
+                X = annotationX,
+                Y = annotationY,
+                Width = annotationWidth,
+                Height = annotationHeight,
                 ImagePath = tempPath
             };
 
@@ -3486,8 +3666,8 @@ public partial class MainWindow : Window
             ? bmpH.PixelHeight 
             : PdfImage.ActualHeight;
 
-        // Get actual PDF page dimensions in points
-        var (pageWidthPts, pageHeightPts) = vm.GetCurrentPageDimensionsInPoints();
+        // Match the bitmap currently shown on screen; pending 90/270 page rotation swaps dimensions.
+        var (pageWidthPts, pageHeightPts) = vm.GetCurrentPageDisplayDimensionsInPoints();
         if (pageWidthPts <= 0 || pageHeightPts <= 0) return;
 
         // Calculate actual conversion factor: pixels per point
@@ -3503,11 +3683,8 @@ public partial class MainWindow : Window
         // Header margin from top (convert points to pixels)
         double headerY = data.HeaderMargin * pixelsPerPoint;
         
-        // Footer margin from bottom (convert points to pixels)
-        double footerFontSize = Math.Max(data.FooterCenter.FontSize, Math.Max(data.FooterLeft.FontSize, data.FooterRight.FontSize));
-        if (footerFontSize < 6) footerFontSize = 10;
-        double footerTextHeightPx = footerFontSize * pixelsPerPoint;
-        double footerY = imageHeightPx - (data.FooterMargin * pixelsPerPoint) - footerTextHeightPx;
+        // Footer margin from bottom. This is a baseline position, matching PdfService.MoveText(..., footerY).
+        double footerY = imageHeightPx - (data.FooterMargin * pixelsPerPoint);
 
         // Side margins (50 points to match PdfService)
         double sideMargin = 50 * pixelsPerPoint;
@@ -3559,18 +3736,24 @@ public partial class MainWindow : Window
         double fontSize = textBox.FontSize * pixelsPerPoint;
         if (fontSize < 6) fontSize = 10 * pixelsPerPoint;
 
-        // Convert offsets from PDF points to screen pixels
-        // OffsetY = distance from page bottom to text position
-        // screenY = (pageHeight - OffsetY) in pixels
-        // This matches the annotation coordinate system
-        double x = textBox.OffsetX * pixelsPerPoint;
-        double y = imageHeightPx - (textBox.OffsetY * pixelsPerPoint);
-        
         // Convert box size from points to pixels
         double boxWidthPx = textBox.BoxWidth * pixelsPerPoint;
         double boxHeightPx = textBox.BoxHeight * pixelsPerPoint;
 
-        // Add text (auto-fit width)
+        // OffsetY is the bottom of the PDF box; Canvas.Top is the top of the WPF box.
+        double x = textBox.OffsetX * pixelsPerPoint;
+        double y = imageHeightPx - (textBox.OffsetY * pixelsPerPoint) - boxHeightPx;
+
+        var border = new Border
+        {
+            Width = boxWidthPx,
+            Height = boxHeightPx,
+            Background = WpfBrushes.Transparent,
+            BorderBrush = textBox.ShowBorder ? new SolidColorBrush(textColor) : WpfBrushes.Transparent,
+            BorderThickness = textBox.ShowBorder ? new Thickness(0.5 * pixelsPerPoint) : new Thickness(0),
+            Padding = new Thickness(3 * pixelsPerPoint)
+        };
+
         if (!string.IsNullOrEmpty(textBox.Text))
         {
             var textBlock = new TextBlock
@@ -3580,7 +3763,8 @@ public partial class MainWindow : Window
                 Foreground = new SolidColorBrush(textColor),
                 FontWeight = textBox.IsBold ? FontWeights.Bold : FontWeights.Normal,
                 FontStyle = textBox.IsItalic ? FontStyles.Italic : FontStyles.Normal,
-                TextWrapping = TextWrapping.NoWrap // Auto-fit width
+                TextWrapping = TextWrapping.NoWrap,
+                ClipToBounds = true
             };
 
             // Try to set font family
@@ -3593,18 +3777,19 @@ public partial class MainWindow : Window
             }
             catch { }
 
-            // Apply rotation if needed
-            if (Math.Abs(textBox.Rotation) > 0.001)
-            {
-                // Center of rotation is the center of the text box
-                textBlock.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
-                textBlock.RenderTransform = new RotateTransform(textBox.Rotation);
-            }
-
-            Canvas.SetLeft(textBlock, x);
-            Canvas.SetTop(textBlock, y);
-            AnnotationCanvas.Children.Add(textBlock);
+            border.Child = textBlock;
         }
+
+        // Apply rotation if needed
+        if (Math.Abs(textBox.Rotation) > 0.001)
+        {
+            border.RenderTransformOrigin = new System.Windows.Point(0.5, 0.5);
+            border.RenderTransform = new RotateTransform(textBox.Rotation);
+        }
+
+        Canvas.SetLeft(border, x);
+        Canvas.SetTop(border, y);
+        AnnotationCanvas.Children.Add(border);
     }
     
     /// <summary>
@@ -3730,6 +3915,23 @@ public partial class MainWindow : Window
         double fontSize = element.FontSize * pixelsPerPoint;
         if (fontSize < 6) fontSize = 10 * pixelsPerPoint;
 
+        var typeface = new System.Windows.Media.Typeface(
+            string.IsNullOrEmpty(element.FontFamily)
+                ? new System.Windows.Media.FontFamily("Arial")
+                : new System.Windows.Media.FontFamily(element.FontFamily),
+            element.IsItalic ? FontStyles.Italic : FontStyles.Normal,
+            element.IsBold ? FontWeights.Bold : FontWeights.Normal,
+            FontStretches.Normal);
+
+        var formattedText = new System.Windows.Media.FormattedText(
+            element.Text,
+            System.Globalization.CultureInfo.CurrentCulture,
+            System.Windows.FlowDirection.LeftToRight,
+            typeface,
+            fontSize,
+            new SolidColorBrush(textColor),
+            1.0);
+
         var textBlock = new TextBlock
         {
             Text = element.Text,
@@ -3752,9 +3954,7 @@ public partial class MainWindow : Window
             // Use default font if specified font is not available
         }
 
-        // Measure text for alignment
-        textBlock.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
-        double textWidth = textBlock.DesiredSize.Width;
+        double textWidth = formattedText.Width;
 
         double left = alignment switch
         {
@@ -3764,7 +3964,7 @@ public partial class MainWindow : Window
         };
 
         Canvas.SetLeft(textBlock, left);
-        Canvas.SetTop(textBlock, y);
+        Canvas.SetTop(textBlock, y - formattedText.Baseline);
         AnnotationCanvas.Children.Add(textBlock);
     }
 
@@ -3780,7 +3980,7 @@ public partial class MainWindow : Window
             ? bmp.PixelWidth 
             : PdfImage.ActualWidth;
 
-        var (pageWidthPts, _) = vm.GetCurrentPageDimensionsInPoints();
+        var (pageWidthPts, _) = vm.GetCurrentPageDisplayDimensionsInPoints();
         if (pageWidthPts <= 0) return vm.ZoomScale;
 
         return imageWidthPx / pageWidthPts;
@@ -3858,6 +4058,15 @@ public partial class MainWindow : Window
                     e.Handled = true;
                 }
             }
+            // Ctrl+C: Copy selected annotation
+            else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                if (DataContext is MainViewModel vmCopy && vmCopy.IsFileLoaded && vmCopy.IsEditMode && vmCopy.HasSelectedAnnotation)
+                {
+                    vmCopy.CopySelectedAnnotationCommand.Execute(null);
+                    e.Handled = true;
+                }
+            }
             // Ctrl+P: Print
             else if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.Control)
             {
@@ -3867,12 +4076,19 @@ public partial class MainWindow : Window
                     e.Handled = true;
                 }
             }
-            // Ctrl+V: Paste image from clipboard
+            // Ctrl+V: Paste annotation (if copied) or image from clipboard
             else if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 if (DataContext is MainViewModel vmPaste && vmPaste.IsFileLoaded && vmPaste.IsEditMode)
                 {
-                    PasteImageFromClipboard();
+                    if (vmPaste.HasCopiedAnnotation)
+                    {
+                        vmPaste.PasteAnnotationCommand.Execute(null);
+                    }
+                    else
+                    {
+                        PasteImageFromClipboard();
+                    }
                     e.Handled = true;
                 }
             }
@@ -4206,8 +4422,6 @@ public partial class MainWindow : Window
                         {
                             t.IsDragging = true;
                         }
-                        _isThumbnailDragging = true;
-
                         // Start the drag operation with multiple items
                         var data = new WpfDataObject("PageThumbnails", vm.SelectedThumbnails.ToList());
                         DragDrop.DoDragDrop(listBoxItem, data, WpfDragDropEffects.Move);
@@ -4217,13 +4431,11 @@ public partial class MainWindow : Window
                         {
                             t.IsDragging = false;
                         }
-                        _isThumbnailDragging = false;
                     }
                     else
                     {
                         // Single item drag
                         _draggedThumbnail = thumbnail;
-                        _isThumbnailDragging = true;
                         thumbnail.IsDragging = true;
 
                         // Start the drag operation
@@ -4232,7 +4444,6 @@ public partial class MainWindow : Window
 
                         // Reset after drag completes
                         thumbnail.IsDragging = false;
-                        _isThumbnailDragging = false;
                         _draggedThumbnail = null;
                     }
 

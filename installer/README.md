@@ -30,7 +30,7 @@ dotnet publish -c Release -r win-x64 --self-contained true
 
 Installer will be created at:
 ```
-installer\output\OpenJPDF-Setup-1.0.0.exe
+installer\output\OpenJPDF-Setup-1.0.2.exe
 ```
 
 ## Installer Features

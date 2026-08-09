@@ -71,6 +71,58 @@ public partial class MainViewModel
     }
 
     [RelayCommand]
+    private async Task ImportPdfPages()
+    {
+        if (!IsFileLoaded)
+        {
+            MessageBox.Show("Please open a PDF file before importing pages.",
+                "Import PDF Pages", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Filter = "PDF Files (*.pdf)|*.pdf",
+            Title = "Import PDF Pages",
+            Multiselect = true
+        };
+
+        if (dialog.ShowDialog() != true || dialog.FileNames.Length == 0)
+            return;
+
+        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
+        int savedPageIndex = CurrentPageIndex;
+        int insertIndex = Math.Clamp(CurrentPageIndex + 1, 0, TotalPages);
+
+        try
+        {
+            StatusMessage = "Preparing current edits...";
+            await BakePendingEditsIntoWorkingPdfAsync(pdfService);
+
+            StatusMessage = "Importing PDF pages...";
+            bool success = await pdfService.ImportPdfPagesAsync(dialog.FileNames, insertIndex);
+
+            if (!success)
+            {
+                StatusMessage = "Import failed";
+                MessageBox.Show("Failed to import PDF pages.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            await RefreshDocumentAfterServiceChangeAsync(pdfService, savedPageIndex, hasUnsavedChanges: true);
+            ClearAnnotationsRequested?.Invoke();
+            RefreshAnnotationsRequested?.Invoke();
+            HasPageOrderChanged = false;
+            StatusMessage = $"Imported {dialog.FileNames.Length} PDF file(s). Save to write changes.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Import failed: {ex.Message}";
+            MessageBox.Show($"Error importing PDF pages:\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    [RelayCommand]
     private async Task SplitPdf()
     {
         if (!IsFileLoaded) return;
@@ -203,6 +255,7 @@ public partial class MainViewModel
                 _pageRotations.Remove(key);
                 _pageRotations[key - 1] = rotation;
             }
+            SyncPageRotationsToService();
             
             var annotationsToRemove = Annotations.Where(a => a.PageNumber == deletedIndex).ToList();
             foreach (var ann in annotationsToRemove)
@@ -284,6 +337,7 @@ public partial class MainViewModel
             _pageRotations.Remove(key);
             _pageRotations[key + 1] = rot;
         }
+        SyncPageRotationsToService();
         
         foreach (var ann in Annotations.Where(a => a.PageNumber > sourceIndex))
         {
@@ -307,7 +361,7 @@ public partial class MainViewModel
     {
         MessageBox.Show(
             "OpenJPDF - PDF Editor\n\n" +
-            "Version 1.0.0\n\n" +
+            "Version 1.0.2\n\n" +
             "Features:\n" +
             "• View PDF files\n" +
             "• Add text and images\n" +

@@ -125,6 +125,56 @@ public class MoveAnnotationAction : IUndoableAction
 }
 
 /// <summary>
+/// Action for moving a line annotation while preserving both endpoints.
+/// </summary>
+public class MoveLineAnnotationAction : IUndoableAction
+{
+    private readonly ShapeAnnotationItem _annotation;
+    private readonly double _oldX, _oldY, _oldX2, _oldY2;
+    private readonly double _newX, _newY, _newX2, _newY2;
+
+    public string Description => $"Move {_annotation.DisplayName}";
+
+    public MoveLineAnnotationAction(
+        ShapeAnnotationItem annotation,
+        double oldX,
+        double oldY,
+        double oldX2,
+        double oldY2,
+        double newX,
+        double newY,
+        double newX2,
+        double newY2)
+    {
+        _annotation = annotation;
+        _oldX = oldX;
+        _oldY = oldY;
+        _oldX2 = oldX2;
+        _oldY2 = oldY2;
+        _newX = newX;
+        _newY = newY;
+        _newX2 = newX2;
+        _newY2 = newY2;
+    }
+
+    public void Execute()
+    {
+        _annotation.X = _newX;
+        _annotation.Y = _newY;
+        _annotation.X2 = _newX2;
+        _annotation.Y2 = _newY2;
+    }
+
+    public void Undo()
+    {
+        _annotation.X = _oldX;
+        _annotation.Y = _oldY;
+        _annotation.X2 = _oldX2;
+        _annotation.Y2 = _oldY2;
+    }
+}
+
+/// <summary>
 /// Action for resizing an annotation
 /// </summary>
 public class ResizeAnnotationAction : IUndoableAction

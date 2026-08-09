@@ -1,7 +1,7 @@
 # OpenJPDF - PDF Editor
 
 [![License](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-green.svg)](OpenJPDF.csproj)
+[![Version](https://img.shields.io/badge/Version-1.0.2-green.svg)](OpenJPDF.csproj)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-orange.svg)](OpenJPDF.csproj)
 
 **โปรแกรมแก้ไข PDF ภาษาไทย ใช้งานฟรี เพื่อสังคม**
@@ -45,7 +45,7 @@ OpenJPDF เป็นโปรแกรมแก้ไข PDF แบบสมบ
 
 ### ดาวน์โหลดโปรแกรม (Download)
 1. ไปที่หน้า [Releases](../../releases)
-2. ดาวน์โหลดไฟล์ติดตั้ง `OpenJPDF-Setup-1.0.0.exe`
+2. ดาวน์โหลดไฟล์ติดตั้ง `OpenJPDF-Setup-1.0.2.exe`
 3. รันไฟล์ติดตั้งและทำตามขั้นตอน
 
 ### ความต้องการระบบ (System Requirements)
@@ -159,15 +159,10 @@ dotnet run
 
 ## 📝 เวอร์ชันและประวัติ (Version History)
 
-### รุ่น 1.0.0 (Current)
-- ปรับปรุงประสิทธิภาพการทำงาน
-- แก้ไขปัญหาความเสถียร
-- ปรับปรุง UI/UX
-
-### รุ่น 1.0.2
-- เพิ่มฟีเจอร์ OCR
-- ปรับปรุงการหมุนหน้า
-- แก้ไขปัญหาการแสดงผลฟอนต์ไทย
+### รุ่น 1.0.2 (Current)
+- แก้ไขปัญหา Save ซ้ำหลังจาก Save ครั้งแรก
+- เพิ่ม Import PDF Pages เข้าเอกสารปัจจุบัน
+- แก้ไขการย้ายหลายหน้าใน sidebar ให้ย้ายครบทั้งก้อน
 
 ### รุ่น 1.0.1
 - เพิ่มฟีเจอร์ Merge/Split PDF
@@ -271,7 +266,7 @@ OpenJPDF เป็นซอฟต์แวร์เสรี (Free Software) ท
 # OpenJPDF - PDF Editor (English)
 
 [![License](https://img.shields.io/badge/License-Free%20for%20Society-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-green.svg)](OpenJPDF.csproj)
+[![Version](https://img.shields.io/badge/Version-1.0.2-green.svg)](OpenJPDF.csproj)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-orange.svg)](OpenJPDF.csproj)
 
 **A Thai-language PDF editor - Free for Society**
@@ -313,7 +308,7 @@ OpenJPDF is a comprehensive PDF editor built with .NET 8 and WPF, designed to be
 
 ### Download Program
 1. Go to [Releases](../../releases) page
-2. Download the installer file `OpenJPDF-Setup-1.0.0.exe`
+2. Download the installer file `OpenJPDF-Setup-1.0.2.exe`
 3. Run the installer and follow the steps
 
 ### System Requirements
@@ -427,15 +422,10 @@ dotnet run
 
 ## 📝 Version History
 
-### Version 1.0.0 (Current)
-- Improved performance
-- Fixed stability issues
-- Enhanced UI/UX
-
-### Version 1.0.2
-- Added OCR feature
-- Improved page rotation
-- Fixed Thai font rendering issues
+### Version 1.0.2 (Current)
+- Fixed repeat Save after the first Save
+- Added Import PDF Pages into the current document
+- Fixed sidebar multi-page move/reorder to move the full selected block
 
 ### Version 1.0.1
 - Added Merge/Split PDF features

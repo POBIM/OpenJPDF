@@ -23,6 +23,12 @@ public partial class PageImage : ObservableObject
     [ObservableProperty]
     private BitmapSource? image;
 
+    [ObservableProperty]
+    private double displayWidth;
+
+    [ObservableProperty]
+    private double displayHeight;
+
     public PageImage(int pageIndex, BitmapSource? image)
     {
         PageIndex = pageIndex;
@@ -33,5 +39,12 @@ public partial class PageImage : ObservableObject
     public void UpdateImage(BitmapSource? newImage)
     {
         Image = newImage;
+    }
+
+    public void UpdateDisplaySize(float pageWidthPoints, float pageHeightPoints, double zoomScale)
+    {
+        const double PointsToDips = 96.0 / 72.0;
+        DisplayWidth = Math.Max(1, pageWidthPoints * PointsToDips * zoomScale);
+        DisplayHeight = Math.Max(1, pageHeightPoints * PointsToDips * zoomScale);
     }
 }

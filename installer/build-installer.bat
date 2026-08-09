@@ -51,6 +51,6 @@ echo   SUCCESS!
 echo ========================================
 echo.
 echo Installer created at:
-echo %~dp0output\OpenJPDF-Setup-1.0.0.exe
+echo %~dp0output\OpenJPDF-Setup-1.0.4.exe
 echo.
 pause

@@ -867,6 +867,15 @@ public class ResizeHandlesManager
             img.Width = newWidth;
             img.Height = newHeight;
         }
+        else if (_targetElement is Canvas lineCanvas &&
+                 _targetAnnotation is ShapeAnnotationItem { ShapeType: ShapeType.Line } lineAnnotation &&
+                 lineCanvas.Children.OfType<Line>().FirstOrDefault() is { } line)
+        {
+            line.X1 = lineAnnotation.X <= lineAnnotation.X2 ? 5 : newWidth - 5;
+            line.X2 = lineAnnotation.X <= lineAnnotation.X2 ? newWidth - 5 : 5;
+            line.Y1 = lineAnnotation.Y <= lineAnnotation.Y2 ? 5 : newHeight - 5;
+            line.Y2 = lineAnnotation.Y <= lineAnnotation.Y2 ? newHeight - 5 : 5;
+        }
         
         // Update handle positions
         UpdateHandlePositions(newLeft, newTop, newWidth, newHeight);
@@ -892,18 +901,57 @@ public class ResizeHandlesManager
             return;
         }
         
+        if (_targetAnnotation is ShapeAnnotationItem { ShapeType: ShapeType.Line } lineAnnotation)
+        {
+            double oldX = lineAnnotation.X;
+            double oldY = lineAnnotation.Y;
+            double oldX2 = lineAnnotation.X2;
+            double oldY2 = lineAnnotation.Y2;
+            double finalMinX = (Canvas.GetLeft(_targetElement) + 5) / _viewModel.ZoomScale;
+            double finalMinY = (Canvas.GetTop(_targetElement) + 5) / _viewModel.ZoomScale;
+            double finalInnerWidth = Math.Max(0, _targetElement.Width - 10) / _viewModel.ZoomScale;
+            double finalInnerHeight = Math.Max(0, _targetElement.Height - 10) / _viewModel.ZoomScale;
+            double lineFinalX = oldX <= oldX2 ? finalMinX : finalMinX + finalInnerWidth;
+            double lineFinalX2 = oldX <= oldX2 ? finalMinX + finalInnerWidth : finalMinX;
+            double lineFinalY = oldY <= oldY2 ? finalMinY : finalMinY + finalInnerHeight;
+            double lineFinalY2 = oldY <= oldY2 ? finalMinY + finalInnerHeight : finalMinY;
+
+            if (Math.Abs(lineFinalX - oldX) > 0.1 || Math.Abs(lineFinalY - oldY) > 0.1 ||
+                Math.Abs(lineFinalX2 - oldX2) > 0.1 || Math.Abs(lineFinalY2 - oldY2) > 0.1)
+            {
+                var resizeAction = new MoveLineAnnotationAction(
+                    lineAnnotation,
+                    oldX, oldY, oldX2, oldY2,
+                    lineFinalX, lineFinalY, lineFinalX2, lineFinalY2);
+                _viewModel.RecordUndoableAction(resizeAction);
+            }
+
+            lineAnnotation.X = lineFinalX;
+            lineAnnotation.Y = lineFinalY;
+            lineAnnotation.X2 = lineFinalX2;
+            lineAnnotation.Y2 = lineFinalY2;
+
+            _isResizing = false;
+            _viewModel.StatusMessage = $"Resized line to {finalInnerWidth:F0} x {finalInnerHeight:F0}";
+
+            _refreshCallback?.Invoke();
+
+            e.Handled = true;
+            return;
+        }
+
         // Get final bounds
         double finalX = Canvas.GetLeft(_targetElement) / _viewModel.ZoomScale;
         double finalY = Canvas.GetTop(_targetElement) / _viewModel.ZoomScale;
         double finalWidth = _targetElement.Width / _viewModel.ZoomScale;
         double finalHeight = _targetElement.Height / _viewModel.ZoomScale;
-        
+
         // Record resize action for undo
         double origX = _originalX / _viewModel.ZoomScale;
         double origY = _originalY / _viewModel.ZoomScale;
         double origW = _originalWidth / _viewModel.ZoomScale;
         double origH = _originalHeight / _viewModel.ZoomScale;
-        
+
         if (Math.Abs(finalX - origX) > 0.1 || Math.Abs(finalY - origY) > 0.1 ||
             Math.Abs(finalWidth - origW) > 0.1 || Math.Abs(finalHeight - origH) > 0.1)
         {
@@ -913,7 +961,7 @@ public class ResizeHandlesManager
                 finalX, finalY, finalWidth, finalHeight);
             _viewModel.RecordUndoableAction(resizeAction);
         }
-        
+
         // Update annotation model
         _targetAnnotation.X = finalX;
         _targetAnnotation.Y = finalY;

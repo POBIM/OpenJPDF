@@ -40,6 +40,19 @@ public enum EditMode
 }
 
 /// <summary>
+/// Page viewing layouts for read-only navigation.
+/// </summary>
+public enum PageViewMode
+{
+    SinglePage,
+    TwoPages,
+    FourPages,
+    Continuous
+}
+
+public sealed record PageViewModeOption(string Label, PageViewMode Mode);
+
+/// <summary>
 /// Information about a side length for display in sidebar
 /// </summary>
 public class SideLengthInfo
@@ -146,6 +159,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string statusMessage = "Ready";
 
+    [ObservableProperty]
+    private bool isSaving;
+
     #endregion
 
     #region Observable Properties - Zoom
@@ -160,6 +176,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private double zoomScale = 1.0;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PageViewColumnCount))]
+    [NotifyPropertyChangedFor(nameof(IsSinglePageSurfaceVisible))]
+    [NotifyPropertyChangedFor(nameof(IsMultiPageSurfaceVisible))]
+    [NotifyPropertyChangedFor(nameof(IsContinuousPageView))]
+    [NotifyPropertyChangedFor(nameof(IsPagedGridView))]
+    [NotifyPropertyChangedFor(nameof(IsScrollablePageView))]
+    private PageViewMode pageViewMode = PageViewMode.Continuous;
+
+    public PageViewModeOption[] PageViewModeOptions { get; } =
+    [
+        new("Single", PageViewMode.SinglePage),
+        new("2 Pages", PageViewMode.TwoPages),
+        new("4 Pages", PageViewMode.FourPages),
+        new("Continuous", PageViewMode.Continuous)
+    ];
+
+    public int PageViewColumnCount => PageViewMode switch
+    {
+        PageViewMode.TwoPages => 2,
+        PageViewMode.FourPages => 4,
+        _ => 1
+    };
+
+    public bool IsSinglePageSurfaceVisible => IsFileLoaded && (IsEditMode || PageViewMode == PageViewMode.SinglePage);
+
+    public bool IsMultiPageSurfaceVisible => IsFileLoaded && !IsEditMode && PageViewMode != PageViewMode.SinglePage;
+
+    public bool IsContinuousPageView => IsFileLoaded && !IsEditMode && PageViewMode == PageViewMode.Continuous;
+
+    public bool IsPagedGridView => IsFileLoaded && !IsEditMode && PageViewMode is PageViewMode.TwoPages or PageViewMode.FourPages;
+
+    public bool IsScrollablePageView => !IsEditMode && PageViewMode != PageViewMode.SinglePage;
 
     #endregion
 
@@ -210,6 +260,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool hasSelectedAnnotation;
+
+    /// <summary>
+    /// Internal clipboard for copy/paste annotations across pages
+    /// </summary>
+    private AnnotationItem? _copiedAnnotation;
 
     [ObservableProperty]
     private bool isTextSelected;
@@ -540,11 +595,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
     }
 
+    partial void OnIsFileLoadedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsSinglePageSurfaceVisible));
+        OnPropertyChanged(nameof(IsMultiPageSurfaceVisible));
+        OnPropertyChanged(nameof(IsContinuousPageView));
+        OnPropertyChanged(nameof(IsPagedGridView));
+    }
+
+    partial void OnIsEditModeChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsSinglePageSurfaceVisible));
+        OnPropertyChanged(nameof(IsMultiPageSurfaceVisible));
+        OnPropertyChanged(nameof(IsContinuousPageView));
+        OnPropertyChanged(nameof(IsPagedGridView));
+        OnPropertyChanged(nameof(IsScrollablePageView));
+    }
+
     partial void OnCurrentPageIndexChanged(int value)
     {
         if (IsFileLoaded && value >= 0 && value < TotalPages)
         {
             CurrentPageNumber = value + 1;
+            if (ActiveDocument != null)
+            {
+                ActiveDocument.CurrentPageIndex = value;
+                ActiveDocument.CurrentPageNumber = value + 1;
+            }
+
+            if (IsScrollablePageView)
+            {
+                CurrentPageRotation = GetPageRotation(value);
+                PageRotationChanged?.Invoke(CurrentPageRotation);
+                _ = PreloadNearbyPagesAsync(value);
+                return;
+            }
+
             ClearAnnotationsRequested?.Invoke();
             
             // Skip re-loading if we're syncing from ActiveDocument (image already set)
@@ -768,6 +854,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (dialog.ShowDialog() == true && dialog.Config != null)
             {
                 HeaderFooterConfig = dialog.Config;
+                if (ActiveDocument != null)
+                {
+                    ActiveDocument.HeaderFooterConfig = HeaderFooterConfig;
+                }
                 OnPropertyChanged(nameof(HasHeaderFooter));
                 RefreshHeaderFooterPreview?.Invoke();
                 
@@ -799,6 +889,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         
         HeaderFooterConfig = null;
+        if (ActiveDocument != null)
+        {
+            ActiveDocument.HeaderFooterConfig = null;
+        }
         OnPropertyChanged(nameof(HasHeaderFooter));
         OnPropertyChanged(nameof(IsEditingHeaderFooter));
         RefreshHeaderFooterPreview?.Invoke();
@@ -850,8 +944,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (HeaderFooterConfig == null) return;
 
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(CurrentPageIndex);
+        var (pageWidthPts, pageHeightPts) = GetCurrentPageDimensionsInPoints();
 
         // Get scale factor: annotation uses ZoomScale, CustomTextBox uses actual PDF points
         // annotation.X/Y = screenPixels / ZoomScale (NOT real PDF points!)
@@ -874,19 +967,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             // Convert PDF coordinates to annotation coordinates
             double annotationX = textBox.OffsetX * scaleFactor;
-            double annotationY = (pageHeightPts - textBox.OffsetY) * scaleFactor;
+            double annotationY = (pageHeightPts - textBox.OffsetY - textBox.BoxHeight) * scaleFactor;
+            double annotationWidth = textBox.BoxWidth * scaleFactor;
+            double annotationHeight = textBox.BoxHeight * scaleFactor;
 
             var annotation = new TextAnnotationItem
             {
                 PageNumber = CurrentPageIndex,
                 X = annotationX,
                 Y = annotationY,
+                Width = annotationWidth,
+                Height = annotationHeight,
                 Text = textBox.Text,
                 FontFamily = textBox.FontFamily,
                 FontSize = textBox.FontSize,
                 Color = textBox.Color,
                 IsBold = textBox.IsBold,
                 IsItalic = textBox.IsItalic,
+                Rotation = textBox.Rotation,
                 BackgroundColor = "#C8E6C9", // Light green to indicate H/F edit mode
                 BorderColor = "#4CAF50",
                 BorderWidth = 2
@@ -938,8 +1036,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (HeaderFooterConfig == null) return;
 
-        var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-        var (pageWidthPts, pageHeightPts) = pdfService.GetPageDimensions(CurrentPageIndex);
+        var (pageWidthPts, pageHeightPts) = GetCurrentPageDimensionsInPoints();
 
         // Get scale factor for conversion
         double pixelsPerPoint = GetPixelsPerPoint();
@@ -953,19 +1050,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             // Convert annotation coordinates back to PDF coordinates
             // PDF_X = annotation.X / scaleFactor
-            // PDF_OffsetY = pageHeightPts - (annotation.Y / scaleFactor)
+            // PDF_OffsetY = pageHeightPts - topY - height
             float pdfX = (float)(annotation.X / scaleFactor);
-            float pdfY = (float)(pageHeightPts - (annotation.Y / scaleFactor));
+            float pdfWidth = (float)(annotation.Width / scaleFactor);
+            float pdfHeight = (float)(annotation.Height / scaleFactor);
+            float pdfY = (float)(pageHeightPts - (annotation.Y / scaleFactor) - pdfHeight);
 
-            // Update position and text
+            // Update position, size and text
             textBox.OffsetX = pdfX;
             textBox.OffsetY = pdfY;
+            textBox.BoxWidth = pdfWidth;
+            textBox.BoxHeight = pdfHeight;
             textBox.Text = annotation.Text;
             textBox.FontFamily = annotation.FontFamily;
             textBox.FontSize = annotation.FontSize;
             textBox.Color = annotation.Color;
             textBox.IsBold = annotation.IsBold;
             textBox.IsItalic = annotation.IsItalic;
+            textBox.Rotation = annotation.Rotation;
         }
         
         // Update CustomImageBox from annotations
@@ -1017,6 +1119,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusMessage = "Header/Footer updated. Save to apply changes.";
     }
 
+    private void CommitHeaderFooterEditModeIfActive()
+    {
+        if (CurrentEditMode != EditMode.EditHeaderFooter)
+        {
+            return;
+        }
+
+        ExitEditHeaderFooterMode();
+        OnPropertyChanged(nameof(IsEditingHeaderFooter));
+    }
+
     /// <summary>
     /// Get pixels per point for current rendered image (requested via event)
     /// </summary>
@@ -1035,7 +1148,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (!IsFileLoaded) return (0, 0);
         
         var pdfService = ActiveDocument?.PdfService ?? _pdfService;
-        return pdfService.GetPageDimensions(CurrentPageIndex);
+        int pageIndex = CurrentPageIndex;
+        var pageThumbnails = ActiveDocument?.PageThumbnails ?? PageThumbnails;
+        if (CurrentPageIndex >= 0 && CurrentPageIndex < pageThumbnails.Count)
+        {
+            pageIndex = pageThumbnails[CurrentPageIndex].OriginalPageIndex;
+        }
+
+        return pdfService.GetPageDimensions(pageIndex);
+    }
+
+    /// <summary>
+    /// Get the current rendered page dimensions in PDF points, including pending user rotation.
+    /// Use this for preview scaling against the bitmap currently shown on screen.
+    /// </summary>
+    public (float Width, float Height) GetCurrentPageDisplayDimensionsInPoints()
+    {
+        var (width, height) = GetCurrentPageDimensionsInPoints();
+        int rotation = ((CurrentPageRotation % 360) + 360) % 360;
+
+        return rotation is 90 or 270
+            ? (height, width)
+            : (width, height);
     }
 
     #endregion

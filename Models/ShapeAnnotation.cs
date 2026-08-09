@@ -24,6 +24,7 @@ public class ShapeAnnotation
     public string FillColor { get; set; } = "Transparent";
     public string StrokeColor { get; set; } = "#000000";
     public float StrokeWidth { get; set; } = 1f;
+    public double Rotation { get; set; }
     
     // For Line shape
     public double X2 { get; set; }
